@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 
 use crate::{
     rope::Rope,
-    tree::{max_children, max_len, min_len, BranchChildren, LeafSlice, Node},
+    tree::{max_children, max_len, min_len, BranchChildren, LeafSlice, Node, SliceInfo},
     FallibleOrd, Measurable,
 };
 
@@ -118,7 +118,9 @@ where
     /// conjunction with it.
     #[doc(hidden)]
     pub fn _append_chunk(&mut self, contents: &[M]) {
-        self.append_leaf_node(Arc::new(Node::Leaf(LeafSlice::from_slice(contents))));
+        let leaf_slice = LeafSlice::from_slice(contents);
+        let info = SliceInfo::<M::Measure>::from_slice(&leaf_slice);
+        self.append_leaf_node(Arc::new(Node::Leaf(leaf_slice, info)));
     }
 
     /// NOT PART OF THE PUBLIC API (hidden from docs for a reason!).
@@ -151,11 +153,14 @@ where
                 NextSlice::None => break,
                 NextSlice::UseBuffer => {
                     let leaf_slice = LeafSlice::from_slice(self.buffer.as_slice());
-                    self.append_leaf_node(Arc::new(Node::Leaf(leaf_slice)));
+                    let info = SliceInfo::<M::Measure>::from_slice(&leaf_slice);
+                    self.append_leaf_node(Arc::new(Node::Leaf(leaf_slice, info)));
                     self.buffer.clear();
                 }
                 NextSlice::Slice(s) => {
-                    self.append_leaf_node(Arc::new(Node::Leaf(LeafSlice::from_slice(s))));
+                    let leaf_slice = LeafSlice::from_slice(s);
+                    let info = SliceInfo::<M::Measure>::from_slice(&leaf_slice);
+                    self.append_leaf_node(Arc::new(Node::Leaf(leaf_slice, info)));
                 }
             }
         }
@@ -255,7 +260,7 @@ where
     fn append_leaf_node(&mut self, leaf: Arc<Node<M>>) {
         let last = self.stack.pop().unwrap();
         match *last {
-            Node::Leaf(_) => {
+            Node::Leaf(_, _) => {
                 if last.leaf_slice().is_empty() {
                     self.stack.push(leaf);
                 } else {

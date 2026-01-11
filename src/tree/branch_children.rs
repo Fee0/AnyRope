@@ -110,14 +110,17 @@ where
             let node1 = Arc::make_mut(node1);
             let node2 = Arc::make_mut(node2);
             match *node1 {
-                Node::Leaf(ref mut slice1) => {
-                    if let Node::Leaf(ref mut slice2) = *node2 {
+                Node::Leaf(ref mut slice1, ref mut info1) => {
+                    if let Node::Leaf(ref mut slice2, ref mut info2) = *node2 {
                         if (slice1.len() + slice2.len()) <= max_children::<M, M::Measure>() {
                             slice1.push_slice(slice2);
+                            *info1 = SliceInfo::<M::Measure>::from_slice(slice1);
                             true
                         } else {
                             let right = slice1.push_slice_split(slice2);
                             *slice2 = right;
+                            *info1 = SliceInfo::<M::Measure>::from_slice(slice1);
+                            *info2 = SliceInfo::<M::Measure>::from_slice(slice2);
                             false
                         }
                     } else {
@@ -181,20 +184,29 @@ where
                 // Scope to contain borrows
                 {
                     let ((_, node_l), (_, node_r)) = self.get_two_mut(i - 1, i);
-                    let slice_l = Arc::make_mut(node_l).leaf_slice_mut();
-                    let slice_r = node_r.leaf_slice();
-                    slice_l.push_slice(slice_r);
+                    let node_l = Arc::make_mut(node_l);
+                    if let Node::Leaf(ref mut slice_l, ref mut info_l) = *node_l {
+                        let slice_r = node_r.leaf_slice();
+                        slice_l.push_slice(slice_r);
+                        *info_l = SliceInfo::<M::Measure>::from_slice(slice_l);
+                    }
                 }
                 self.remove(i);
             } else if self.nodes()[i - 1].leaf_slice().len() < max_len::<M, M::Measure>() {
                 // Scope to contain borrows
                 {
                     let ((_, node_l), (_, node_r)) = self.get_two_mut(i - 1, i);
-                    let slice_l = Arc::make_mut(node_l).leaf_slice_mut();
-                    let slice_r = Arc::make_mut(node_r).leaf_slice_mut();
-                    let split_index_r = max_len::<M, M::Measure>() - slice_l.len();
-                    slice_l.push_slice(&slice_r[..split_index_r]);
-                    slice_r.truncate_front(split_index_r);
+                    let node_l = Arc::make_mut(node_l);
+                    let node_r = Arc::make_mut(node_r);
+                    if let Node::Leaf(ref mut slice_l, ref mut info_l) = *node_l {
+                        if let Node::Leaf(ref mut slice_r, ref mut info_r) = *node_r {
+                            let split_index_r = max_len::<M, M::Measure>() - slice_l.len();
+                            slice_l.push_slice(&slice_r[..split_index_r]);
+                            slice_r.truncate_front(split_index_r);
+                            *info_l = SliceInfo::<M::Measure>::from_slice(slice_l);
+                            *info_r = SliceInfo::<M::Measure>::from_slice(slice_r);
+                        }
+                    }
                 }
                 i += 1;
             } else {
@@ -804,24 +816,26 @@ mod tests {
         Width,
     };
 
+    fn make_leaf(slice: &[Width]) -> Arc<Node<Width>> {
+        let leaf_slice = LeafSlice::from_slice(slice);
+        let info = SliceInfo::<usize>::from_slice(&leaf_slice);
+        Arc::new(Node::Leaf(leaf_slice, info))
+    }
+
     #[test]
     fn search_width_01() {
         let mut children = BranchChildren::new();
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[
-                Width(1),
-                Width(2),
-                Width(4),
-            ]))),
+            make_leaf(&[Width(1), Width(2), Width(4)]),
         ));
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[Width(0), Width(0)]))),
+            make_leaf(&[Width(0), Width(0)]),
         ));
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[Width(9), Width(1)]))),
+            make_leaf(&[Width(9), Width(1)]),
         ));
 
         children.update_child_info(0);
@@ -855,19 +869,15 @@ mod tests {
         let mut children = BranchChildren::new();
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[
-                Width(1),
-                Width(2),
-                Width(4),
-            ]))),
+            make_leaf(&[Width(1), Width(2), Width(4)]),
         ));
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[Width(0), Width(0)]))),
+            make_leaf(&[Width(0), Width(0)]),
         ));
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[Width(9), Width(1)]))),
+            make_leaf(&[Width(9), Width(1)]),
         ));
 
         children.update_child_info(0);
@@ -882,19 +892,15 @@ mod tests {
         let mut children = BranchChildren::new();
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[
-                Width(1),
-                Width(2),
-                Width(4),
-            ]))),
+            make_leaf(&[Width(1), Width(2), Width(4)]),
         ));
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[Width(0), Width(0)]))),
+            make_leaf(&[Width(0), Width(0)]),
         ));
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[Width(9), Width(1)]))),
+            make_leaf(&[Width(9), Width(1)]),
         ));
 
         children.update_child_info(0);
@@ -953,19 +959,15 @@ mod tests {
         let mut children = BranchChildren::new();
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[
-                Width(1),
-                Width(2),
-                Width(4),
-            ]))),
+            make_leaf(&[Width(1), Width(2), Width(4)]),
         ));
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[Width(0), Width(0)]))),
+            make_leaf(&[Width(0), Width(0)]),
         ));
         children.push((
             SliceInfo::<usize>::new::<Width>(),
-            Arc::new(Node::Leaf(LeafSlice::from_slice(&[Width(9), Width(1)]))),
+            make_leaf(&[Width(9), Width(1)]),
         ));
 
         children.update_child_info(0);

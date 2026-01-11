@@ -85,7 +85,7 @@ where
             match *(node as &Node<M>) {
                 // Early out if we reach a leaf, because we can do the
                 // simpler lightweight slice then.
-                Node::Leaf(ref slice) => {
+                Node::Leaf(ref slice, _) => {
                     let start = start_measure_to_index(slice, n_start, cmp);
                     let end = start + end_measure_to_index(&slice[start..], n_end - n_start, cmp);
                     return RopeSlice(RSEnum::Light {
@@ -155,7 +155,7 @@ where
             match *(node as &Node<M>) {
                 // Early out if we reach a leaf, because we can do the
                 // simpler lightweight slice then.
-                Node::Leaf(ref slice) => {
+                Node::Leaf(ref slice, _) => {
                     let start_index = n_start;
                     let end_index = n_end;
                     return Ok(RopeSlice(RSEnum::Light {

@@ -494,7 +494,7 @@ where
             let mut node_ref = node;
             loop {
                 match **node_ref {
-                    Node::Leaf(ref slice) => {
+                    Node::Leaf(ref slice, _) => {
                         if at_index < end_index || index == 0 {
                             index = info.len as isize - start_index as isize;
                         } else {

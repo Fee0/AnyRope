@@ -17,7 +17,7 @@ where
     [(); max_len::<M, M::Measure>()]: Sized,
     [(); max_children::<M, M::Measure>()]: Sized,
 {
-    Leaf(LeafSlice<M>),
+    Leaf(LeafSlice<M>, SliceInfo<M::Measure>),
     Branch(BranchChildren<M>),
 }
 
@@ -30,7 +30,7 @@ where
     /// Creates an empty [`Node<M>`].
     #[inline(always)]
     pub fn new() -> Self {
-        Node::Leaf(LeafSlice::from_slice(&[]))
+        Node::Leaf(LeafSlice::from_slice(&[]), SliceInfo::<M::Measure>::new::<M>())
     }
 
     /// Total number of items in the [`Node<M>`].
@@ -94,7 +94,11 @@ where
         ),
     {
         match self {
-            Node::Leaf(slice) => edit(measure, info, slice),
+            Node::Leaf(slice, ref mut cached_info) => {
+                let result = edit(measure, info, slice);
+                *cached_info = result.0;
+                result
+            }
             Node::Branch(children) => {
                 // Compact leaf children if we're very close to maximum leaf
                 // fragmentation. This basically guards against excessive memory
@@ -164,7 +168,11 @@ where
     ) -> (SliceInfo<M::Measure>, bool) {
         let info = self.info();
         match self {
-            Node::Leaf(slice) => remove_from_slice(slice, start, end, cmp, incl_left, incl_right),
+            Node::Leaf(slice, ref mut cached_info) => {
+                let result = remove_from_slice(slice, start, end, cmp, incl_left, incl_right);
+                *cached_info = result.0;
+                result
+            }
             Node::Branch(children) => {
                 remove_from_children(children, start, end, cmp, incl_left, incl_right, info)
             }
@@ -216,7 +224,7 @@ where
     pub fn prepend_at_depth(&mut self, other: Arc<Node<M>>, depth: usize) -> Option<Arc<Self>> {
         if depth == 0 {
             match *self {
-                Node::Leaf(_) => {
+                Node::Leaf(_, _) => {
                     if !other.is_leaf() {
                         panic!("Tree-append siblings have differing types.");
                     } else {
@@ -273,9 +281,12 @@ where
         debug_assert!(measure != M::Measure::default());
         debug_assert!(measure != (self.info().measure));
         match *self {
-            Node::Leaf(ref mut slice) => {
+            Node::Leaf(ref mut slice, ref mut cached_info) => {
                 let index = end_measure_to_index(slice, measure, cmp);
-                Node::Leaf(slice.split_off(index))
+                let right_slice = slice.split_off(index);
+                let right_info = SliceInfo::<M::Measure>::from_slice(&right_slice);
+                *cached_info = SliceInfo::<M::Measure>::from_slice(slice);
+                Node::Leaf(right_slice, right_info)
             }
             Node::Branch(ref mut children) => {
                 let (child_i, acc_info) = children.search_end_measure(measure, cmp);
@@ -313,9 +324,12 @@ where
         debug_assert!(measure != M::Measure::default());
         debug_assert!(measure != (self.info().measure));
         match *self {
-            Node::Leaf(ref mut slice) => {
+            Node::Leaf(ref mut slice, ref mut cached_info) => {
                 let index = start_measure_to_index(slice, measure, cmp);
-                Node::Leaf(slice.split_off(index))
+                let right_slice = slice.split_off(index);
+                let right_info = SliceInfo::<M::Measure>::from_slice(&right_slice);
+                *cached_info = SliceInfo::<M::Measure>::from_slice(slice);
+                Node::Leaf(right_slice, right_info)
             }
             Node::Branch(ref mut children) => {
                 let (child_i, acc_info) = children.search_start_measure(measure, cmp);
@@ -351,7 +365,7 @@ where
 
         loop {
             match *node {
-                Node::Leaf(ref slice) => {
+                Node::Leaf(ref slice, _) => {
                     return (slice, info);
                 }
                 Node::Branch(ref children) => {
@@ -376,7 +390,7 @@ where
 
         loop {
             match *node {
-                Node::Leaf(ref slice) => {
+                Node::Leaf(ref slice, _) => {
                     return (slice, info);
                 }
                 Node::Branch(ref children) => {
@@ -402,7 +416,7 @@ where
 
         loop {
             match *node {
-                Node::Leaf(ref slice) => {
+                Node::Leaf(ref slice, _) => {
                     return (slice, info);
                 }
                 Node::Branch(ref children) => {
@@ -459,7 +473,7 @@ where
 
     pub fn info(&self) -> SliceInfo<M::Measure> {
         match *self {
-            Node::Leaf(ref slice) => SliceInfo::<M::Measure>::from_slice(slice),
+            Node::Leaf(_, info) => info,
             Node::Branch(ref children) => children.combined_info(),
         }
     }
@@ -490,28 +504,28 @@ where
 
     pub fn leaf_slice(&self) -> &[M] {
         match *self {
-            Node::Leaf(ref slice) => slice,
+            Node::Leaf(ref slice, _) => slice,
             _ => unreachable!(),
         }
     }
 
     pub fn leaf_slice_mut(&mut self) -> &mut LeafSlice<M> {
         match *self {
-            Node::Leaf(ref mut slice) => slice,
+            Node::Leaf(ref mut slice, _) => slice,
             _ => panic!(),
         }
     }
 
     pub fn is_leaf(&self) -> bool {
         match *self {
-            Node::Leaf(_) => true,
+            Node::Leaf(_, _) => true,
             Node::Branch(_) => false,
         }
     }
 
     pub fn is_undersized(&self) -> bool {
         match *self {
-            Node::Leaf(ref slice) => slice.len() < min_len::<M, M::Measure>(),
+            Node::Leaf(ref slice, _) => slice.len() < min_len::<M, M::Measure>(),
             Node::Branch(ref children) => children.len() < min_children::<M, M::Measure>(),
         }
     }
@@ -526,7 +540,7 @@ where
 
         loop {
             match *node {
-                Node::Leaf(_) => return depth,
+                Node::Leaf(_, _) => return depth,
                 Node::Branch(ref children) => {
                     depth += 1;
                     node = &*children.nodes()[0];
@@ -539,7 +553,7 @@ where
     /// tree is consistent with the actual data.
     pub fn assert_integrity(&self) {
         match *self {
-            Node::Leaf(_) => {}
+            Node::Leaf(_, _) => {}
             Node::Branch(ref children) => {
                 for (info, node) in children.iter() {
                     assert_eq!(info.len, node.info().len);
@@ -553,7 +567,7 @@ where
     pub fn assert_balance(&self) -> usize {
         // Depth, child count, and leaf node emptiness
         match *self {
-            Node::Leaf(_) => 1,
+            Node::Leaf(_, _) => 1,
             Node::Branch(ref children) => {
                 let first_depth = children.nodes()[0].assert_balance();
                 for node in &children.nodes()[1..] {
@@ -568,7 +582,7 @@ where
     /// children and all non-root leaf nodes are non-empty.
     pub fn assert_node_size(&self, is_root: bool) {
         match *self {
-            Node::Leaf(ref slice) => {
+            Node::Leaf(ref slice, _) => {
                 // Leaf size
                 if !is_root {
                     assert!(slice.len() > 0);
@@ -599,7 +613,7 @@ where
             loop {
                 let do_merge = (children.len() > 1)
                     && match *children.nodes()[0] {
-                        Node::Leaf(ref slice) => slice.len() < min_len::<M, M::Measure>(),
+                        Node::Leaf(ref slice, _) => slice.len() < min_len::<M, M::Measure>(),
                         Node::Branch(ref children2) => {
                             children2.len() < min_children::<M, M::Measure>()
                         }
@@ -630,7 +644,7 @@ where
                 let last_i = children.len() - 1;
                 let do_merge = (children.len() > 1)
                     && match *children.nodes()[last_i] {
-                        Node::Leaf(ref slice) => slice.len() < min_len::<M, M::Measure>(),
+                        Node::Leaf(ref slice, _) => slice.len() < min_len::<M, M::Measure>(),
                         Node::Branch(ref children2) => {
                             children2.len() < min_children::<M, M::Measure>()
                         }
@@ -668,7 +682,7 @@ where
                 if children.len() > 1 {
                     let (child_i, start_info) = children.search_start_measure(measure, cmp);
                     let mut do_merge = match *children.nodes()[child_i] {
-                        Node::Leaf(ref slice) => slice.len() < min_len::<M, M::Measure>(),
+                        Node::Leaf(ref slice, _) => slice.len() < min_len::<M, M::Measure>(),
                         Node::Branch(ref children2) => {
                             children2.len() < min_children::<M, M::Measure>()
                         }
@@ -682,7 +696,7 @@ where
                         do_merge |= {
                             cmp(&start_info.measure, &measure).is_eq()
                                 && match *children.nodes()[child_i - 1] {
-                                    Node::Leaf(ref slice) => {
+                                    Node::Leaf(ref slice, _) => {
                                         slice.len() < min_len::<M, M::Measure>()
                                     }
                                     Node::Branch(ref children2) => {

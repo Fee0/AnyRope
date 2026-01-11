@@ -154,7 +154,7 @@ where
 
     /// Total number of elements in [`Rope<M>`].
     ///
-    /// Runs in O(N) time.
+    /// Runs in O(1) time.
     #[inline]
     pub fn len(&self) -> usize {
         self.root.len()
@@ -162,7 +162,7 @@ where
 
     /// Returns `true` if the [`Rope<M>`] is empty.
     ///
-    /// Runs in O(N) time.
+    /// Runs in O(1) time.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.root.len() == 0
@@ -170,7 +170,7 @@ where
 
     /// Sum of all measures of in [`Rope<M>`].
     ///
-    /// Runs in O(N) time.
+    /// Runs in O(1) time.
     #[inline]
     pub fn measure(&self) -> M::Measure {
         self.root.measure()
@@ -319,7 +319,7 @@ where
                         let r_slice_info = SliceInfo::<M::Measure>::from_slice(&r_slice);
                         (
                             l_slice_info,
-                            Some((r_slice_info, Arc::new(Node::Leaf(r_slice)))),
+                            Some((r_slice_info, Arc::new(Node::Leaf(r_slice, r_slice_info)))),
                         )
                     } else {
                         // Leaf couldn't be validly split, so leave it oversized
@@ -1540,7 +1540,7 @@ where
 {
     #[inline]
     fn from(r: &'a Rope<M>) -> Self {
-        if let Node::Leaf(ref slice) = *r.root {
+        if let Node::Leaf(ref slice, _) = *r.root {
             std::borrow::Cow::Borrowed(slice)
         } else {
             std::borrow::Cow::Owned(Vec::from(r))
@@ -2612,5 +2612,193 @@ mod tests {
         assert!(!rope.is_instance(&c1));
         assert!(rope.is_instance(&c2));
         assert!(!c1.is_instance(&c2));
+    }
+
+    // Helper function to compute the actual measure by iterating (O(N))
+    fn compute_actual_measure(rope: &Rope<Width>) -> usize {
+        rope.iter().map(|(_, w)| w.0).sum()
+    }
+
+    // Helper function to compute the actual length by iterating (O(N))
+    fn compute_actual_len(rope: &Rope<Width>) -> usize {
+        rope.iter().count()
+    }
+
+    /// Test that verifies the O(1) measure() fix works correctly.
+    /// The cached SliceInfo should always match the actual computed values.
+    #[test]
+    fn cached_info_matches_actual_after_creation() {
+        // Test with empty rope
+        let empty_rope: Rope<Width> = Rope::new();
+        assert_eq!(empty_rope.measure(), compute_actual_measure(&empty_rope));
+        assert_eq!(empty_rope.len(), compute_actual_len(&empty_rope));
+
+        // Test with small rope
+        let small_rope = Rope::from_slice(&[Width(1), Width(2), Width(3)]);
+        assert_eq!(small_rope.measure(), compute_actual_measure(&small_rope));
+        assert_eq!(small_rope.len(), compute_actual_len(&small_rope));
+
+        // Test with larger rope (uses pseudo_random which creates a bigger rope)
+        let large_rope = Rope::from(pseudo_random());
+        assert_eq!(large_rope.measure(), compute_actual_measure(&large_rope));
+        assert_eq!(large_rope.len(), compute_actual_len(&large_rope));
+
+        // Test with zero-width elements
+        let zero_width_rope = Rope::from_slice(&[Width(0), Width(0), Width(5), Width(0)]);
+        assert_eq!(zero_width_rope.measure(), compute_actual_measure(&zero_width_rope));
+        assert_eq!(zero_width_rope.len(), compute_actual_len(&zero_width_rope));
+    }
+
+    /// Test that cached info stays correct after insert operations
+    #[test]
+    fn cached_info_correct_after_insert() {
+        let mut rope = Rope::from_slice(&[Width(1), Width(2), Width(3)]);
+        
+        // Insert at beginning
+        rope.insert_slice(0, &[Width(10)], usize::cmp);
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+
+        // Insert in middle
+        rope.insert_slice(3, &[Width(5), Width(0)], usize::cmp);
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+
+        // Insert at end
+        rope.insert_slice(rope.measure(), &[Width(7)], usize::cmp);
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+
+        // Multiple inserts on larger rope
+        let mut large_rope = Rope::from(pseudo_random());
+        for i in 0..10 {
+            large_rope.insert_slice(i * 5, &[Width(i)], usize::cmp);
+            assert_eq!(large_rope.measure(), compute_actual_measure(&large_rope));
+            assert_eq!(large_rope.len(), compute_actual_len(&large_rope));
+        }
+    }
+
+    /// Test that cached info stays correct after remove operations
+    #[test]
+    fn cached_info_correct_after_remove() {
+        let mut rope = Rope::from_slice(&[Width(1), Width(2), Width(3), Width(4), Width(5)]);
+        
+        // Remove from middle
+        rope.remove_inclusive(2..4, usize::cmp);
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+
+        // Remove from beginning
+        rope.remove_inclusive(0..1, usize::cmp);
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+
+        // Multiple removes on larger rope
+        let mut large_rope = Rope::from(pseudo_random());
+        let initial_measure = large_rope.measure();
+        for i in 0..5 {
+            if large_rope.measure() > 10 {
+                let start = i % large_rope.measure().max(1);
+                let end = (start + 5).min(large_rope.measure());
+                if start < end {
+                    large_rope.remove_inclusive(start..end, usize::cmp);
+                    assert_eq!(large_rope.measure(), compute_actual_measure(&large_rope));
+                    assert_eq!(large_rope.len(), compute_actual_len(&large_rope));
+                }
+            }
+        }
+        // Verify something was actually removed
+        assert!(large_rope.measure() < initial_measure);
+    }
+
+    /// Test that cached info stays correct after split_off operations
+    #[test]
+    fn cached_info_correct_after_split() {
+        let mut rope = Rope::from_slice(&[Width(1), Width(2), Width(3), Width(4), Width(5)]);
+        
+        // Split in middle
+        let right = rope.split_off(6, usize::cmp);
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+        assert_eq!(right.measure(), compute_actual_measure(&right));
+        assert_eq!(right.len(), compute_actual_len(&right));
+
+        // Split larger rope multiple times
+        let mut large_rope = Rope::from(pseudo_random());
+        for _ in 0..3 {
+            if large_rope.measure() > 20 {
+                let split_point = large_rope.measure() / 2;
+                let right_part = large_rope.split_off(split_point, usize::cmp);
+                assert_eq!(large_rope.measure(), compute_actual_measure(&large_rope));
+                assert_eq!(large_rope.len(), compute_actual_len(&large_rope));
+                assert_eq!(right_part.measure(), compute_actual_measure(&right_part));
+                assert_eq!(right_part.len(), compute_actual_len(&right_part));
+            }
+        }
+    }
+
+    /// Test that cached info stays correct after append operations
+    #[test]
+    fn cached_info_correct_after_append() {
+        let mut rope1 = Rope::from_slice(&[Width(1), Width(2), Width(3)]);
+        let rope2 = Rope::from_slice(&[Width(4), Width(5), Width(6)]);
+        
+        rope1.append(rope2);
+        assert_eq!(rope1.measure(), compute_actual_measure(&rope1));
+        assert_eq!(rope1.len(), compute_actual_len(&rope1));
+
+        // Append to larger rope
+        let mut large_rope = Rope::from(pseudo_random());
+        let to_append = Rope::from_slice(&[Width(100), Width(200)]);
+        large_rope.append(to_append);
+        assert_eq!(large_rope.measure(), compute_actual_measure(&large_rope));
+        assert_eq!(large_rope.len(), compute_actual_len(&large_rope));
+    }
+
+    /// Comprehensive test: mix of all operations
+    #[test]
+    fn cached_info_correct_after_mixed_operations() {
+        let mut rope = Rope::from(pseudo_random());
+        
+        // Verify initial state
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+
+        // Insert
+        rope.insert_slice(10, &[Width(99), Width(0), Width(1)], usize::cmp);
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+
+        // Remove
+        rope.remove_inclusive(5..15, usize::cmp);
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+
+        // Split
+        let right = rope.split_off(rope.measure() / 2, usize::cmp);
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+        assert_eq!(right.measure(), compute_actual_measure(&right));
+
+        // Append
+        rope.append(right);
+        assert_eq!(rope.measure(), compute_actual_measure(&rope));
+        assert_eq!(rope.len(), compute_actual_len(&rope));
+
+        // More inserts
+        for i in 0..5 {
+            rope.insert_slice(i * 10, &[Width(i * 2)], usize::cmp);
+            assert_eq!(rope.measure(), compute_actual_measure(&rope));
+            assert_eq!(rope.len(), compute_actual_len(&rope));
+        }
+
+        // More removes
+        for _ in 0..3 {
+            if rope.measure() > 20 {
+                rope.remove_inclusive(5..10, usize::cmp);
+                assert_eq!(rope.measure(), compute_actual_measure(&rope));
+                assert_eq!(rope.len(), compute_actual_len(&rope));
+            }
+        }
     }
 }

@@ -1,9 +1,4 @@
-#![allow(
-    incomplete_features,
-    clippy::arc_with_non_send_sync,
-    clippy::too_many_arguments
-)]
-#![feature(generic_const_exprs)]
+#![allow(clippy::arc_with_non_send_sync, clippy::too_many_arguments)]
 //! AnyRope is an arbitrary data rope for Rust.
 //!
 //! AnyRope's [`Rope<M>`] contains elements `M` that implement [`Measurable`], a
@@ -30,7 +25,6 @@
 //! underline, or skip:
 //!
 //! ```rust
-//! #![feature(generic_const_exprs)]
 //! # use std::io::Result;
 //! use std::fs::File;
 //! use std::io::{BufReader, BufWriter};
@@ -72,7 +66,7 @@
 //! // - Start underlining;
 //! // - Skip 4 characters;
 //! // - Change the rendering back to normal.
-//! let my_tagger = Rope::from_slice(&[Skip(5), InRed, UnderLine, Skip(4), Normal]);
+//! let my_tagger = Rope::<Tag>::from_slice(&[Skip(5), InRed, UnderLine, Skip(4), Normal]);
 //! // Do note that Tag::Skip only represents characters because we are also iterating
 //! // over a `Chars` iterator, and have chosen to do so.
 //!
@@ -141,7 +135,7 @@ pub use crate::{
     rope::Rope,
     rope_builder::RopeBuilder,
     slice::RopeSlice,
-    tree::{max_children, max_len},
+    tree::{DEFAULT_BRANCH_CAP, DEFAULT_LEAF_CAP},
 };
 
 /// A trait defining a comparison that must panic if there is ever ambiguity

@@ -1,5 +1,5 @@
 use any_rope::{Measurable, Rope};
-use rand::Rng;
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Lipsum {
@@ -29,10 +29,12 @@ impl Measurable for Lipsum {
 }
 use self::Lipsum::*;
 
+type TestRope = Rope<Lipsum, 9, 5>;
+
 #[test]
 #[cfg_attr(miri, ignore)]
 fn remove_at_chunk_boundery() {
-    let mut rng = rand::thread_rng();
+    let mut rng = StdRng::seed_from_u64(0);
 
     let medium_vec: Vec<Lipsum> = {
         (0..100000)
@@ -52,7 +54,7 @@ fn remove_at_chunk_boundery() {
             .collect()
     };
 
-    let mut r = Rope::from_slice(medium_vec.as_slice());
+    let mut r = TestRope::from_slice(medium_vec.as_slice());
     // remove exactly at a chunk boundry
     // to trigger an edgecase in fix_tree_seam
     r.remove_exclusive(31354..58881, usize::cmp);

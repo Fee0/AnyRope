@@ -1,42 +1,43 @@
 use std::{cmp::Ordering, ops::RangeBounds, sync::Arc};
 
 use crate::{
+    DEFAULT_BRANCH_CAP, DEFAULT_LEAF_CAP, Error, FallibleOrd, Measurable, MeasureRange, Result,
     end_bound_to_num, fallible_saturating_sub,
     iter::{Chunks, Iter},
     measures_from_range,
     rope::Rope,
     slice_utils::{end_measure_to_index, index_to_measure, measure_of, start_measure_to_index},
     start_bound_to_num,
-    tree::{max_children, max_len, Count, Node, SliceInfo},
-    Error, FallibleOrd, Measurable, MeasureRange, Result,
+    tree::{Count, Node, SliceInfo},
 };
 
-/// An immutable view into part of a [`Rope<M>`].
+/// An immutable view into part of a [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
 ///
-/// Just like standard [`&[M]`][Measurable] slices, [`RopeSlice<M>`]s behave as
+/// Just like standard [`&[M]`][Measurable] slices, [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`]s behave as
 /// if the slice in their range is the only slice that exists. All indexing is
 /// relative to the start of their range, and all iterators and methods that
 /// return [`M`][Measurable]s truncate those to the range of the slice.
 ///
-/// In other words, the behavior of a [`RopeSlice<M>`] is always identical to
-/// that of a full [`Rope<M>`] created from the same slice range. Nothing should
+/// In other words, the behavior of a [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`] is always identical to
+/// that of a full [`Rope<M, LEAF_CAP, BRANCH_CAP>`] created from the same slice range. Nothing should
 /// be surprising here.
 #[derive(Copy, Clone)]
-pub struct RopeSlice<'a, M>(pub(crate) RSEnum<'a, M>)
+pub struct RopeSlice<
+    'a,
+    M,
+    const LEAF_CAP: usize = DEFAULT_LEAF_CAP,
+    const BRANCH_CAP: usize = DEFAULT_BRANCH_CAP,
+>(pub(crate) RSEnum<'a, M, LEAF_CAP, BRANCH_CAP>)
 where
-    M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized;
+    M: Measurable;
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) enum RSEnum<'a, M>
+pub(crate) enum RSEnum<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     Full {
-        node: &'a Arc<Node<M>>,
+        node: &'a Arc<Node<M, LEAF_CAP, BRANCH_CAP>>,
         start_info: SliceInfo<M::Measure>,
         end_info: SliceInfo<M::Measure>,
     },
@@ -45,14 +46,12 @@ where
     },
 }
 
-impl<'a, M> RopeSlice<'a, M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     pub(crate) fn new_with_range(
-        node: &'a Arc<Node<M>>,
+        node: &'a Arc<Node<M, LEAF_CAP, BRANCH_CAP>>,
         start: M::Measure,
         end: M::Measure,
         cmp: &impl Fn(&M::Measure, &M::Measure) -> Ordering,
@@ -82,7 +81,7 @@ where
         let mut n_end = end;
         let mut node = node;
         'outer: loop {
-            match *(node as &Node<M>) {
+            match *(node as &Node<M, LEAF_CAP, BRANCH_CAP>) {
                 // Early out if we reach a leaf, because we can do the
                 // simpler lightweight slice then.
                 Node::Leaf(ref slice, _) => {
@@ -120,7 +119,7 @@ where
     }
 
     pub(crate) fn new_with_index_range(
-        node: &'a Arc<Node<M>>,
+        node: &'a Arc<Node<M, LEAF_CAP, BRANCH_CAP>>,
         start: usize,
         end: usize,
     ) -> Result<Self, M> {
@@ -152,7 +151,7 @@ where
         let mut n_end = end;
         let mut node = node;
         'outer: loop {
-            match *(node as &Node<M>) {
+            match *(node as &Node<M, LEAF_CAP, BRANCH_CAP>) {
                 // Early out if we reach a leaf, because we can do the
                 // simpler lightweight slice then.
                 Node::Leaf(ref slice, _) => {
@@ -190,7 +189,7 @@ where
     //-----------------------------------------------------------------------
     // Informational methods
 
-    /// Total number of elements in [`RopeSlice<M>`].
+    /// Total number of elements in [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// Runs in O(1) time.
     #[inline]
@@ -205,7 +204,7 @@ where
         }
     }
 
-    /// Returns `true` if the [`RopeSlice<M>`] is empty.
+    /// Returns `true` if the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`] is empty.
     ///
     /// Runs in O(1) time.
     #[inline]
@@ -213,7 +212,7 @@ where
         self.len() == 0
     }
 
-    /// Sum of all measures of in [`RopeSlice<M>`].
+    /// Sum of all measures of in [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// Runs in O(1) time.
     #[inline]
@@ -336,7 +335,7 @@ where
     /// Also returns the index and measure of the beginning of the chunk.
     ///
     /// Note: for convenience, a one-past-the-end `index` returns the last
-    /// chunk of the [`RopeSlice<M>`].
+    /// chunk of the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// The return value is organized as `(chunk, chunk_index, chunk_measure)`.
     ///
@@ -356,7 +355,7 @@ where
     /// Also returns the index and measure of the beginning of the chunk.
     ///
     /// Note: for convenience, a one-past-the-end `measure` returns the last
-    /// chunk of the [`RopeSlice<M>`].
+    /// chunk of the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// The return value is organized as `(chunk, chunk_index, chunk_measure)`.
     ///
@@ -383,10 +382,10 @@ where
         }
     }
 
-    /// Returns the entire contents of the [`RopeSlice<M>`] as a
+    /// Returns the entire contents of the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`] as a
     /// [`&[M]`][Measurable] if possible.
     ///
-    /// This is useful for optimizing cases where the [`RopeSlice<M>`] is not
+    /// This is useful for optimizing cases where the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`] is not
     /// very long.
     ///
     /// For large slices this method will typically fail and return [`None`]
@@ -407,7 +406,7 @@ where
     //-----------------------------------------------------------------------
     // Slice creation
 
-    /// Gets an sub-slice of the [`RopeSlice<M>`], using a measure range.
+    /// Gets an sub-slice of the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`], using a measure range.
     ///
     /// Uses range syntax, e.g. `2..7`, `2..`, etc.
     ///
@@ -416,7 +415,7 @@ where
     /// ```rust
     /// # use any_rope::Rope;
     /// # use any_rope::Width;
-    /// let mut rope = Rope::from_slice(&[
+    /// let mut rope = Rope::<Width>::from_slice(&[
     ///     Width(1),
     ///     Width(2),
     ///     Width(3),
@@ -461,7 +460,7 @@ where
         }
     }
 
-    /// Gets and sub-slice of the [`RopeSlice<M>`], using an index range.
+    /// Gets and sub-slice of the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`], using an index range.
     ///
     /// Uses range syntax, e.g. `2..7`, `2..`, etc.
     ///
@@ -486,7 +485,7 @@ where
     //-----------------------------------------------------------------------
     // Iterator methods
 
-    /// Creates an iterator over the [`RopeSlice<M>`].
+    /// Creates an iterator over the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// This iterator will return values of type [`Option<(usize, M)>`], where
     /// the `usize` is the measure sum where the given [`M`][Measurable]
@@ -494,23 +493,25 @@ where
     ///
     /// Runs in O(log N) time.
     #[inline]
-    pub fn iter(&self) -> Iter<'a, M> {
+    pub fn iter(&self) -> Iter<'a, M, LEAF_CAP, BRANCH_CAP> {
         match *self {
             RopeSlice(RSEnum::Full {
                 node,
                 start_info,
                 end_info,
-            }) => Iter::new_with_range(
+            }) => Iter::<M, LEAF_CAP, BRANCH_CAP>::new_with_range(
                 node,
                 (start_info.len as usize, end_info.len as usize),
                 (start_info.measure, end_info.measure),
                 M::Measure::fallible_cmp,
             ),
-            RopeSlice(RSEnum::Light { slice, .. }) => Iter::from_slice(slice),
+            RopeSlice(RSEnum::Light { slice, .. }) => {
+                Iter::<M, LEAF_CAP, BRANCH_CAP>::from_slice(slice)
+            }
         }
     }
 
-    /// Creates an iterator over the [`RopeSlice<M>`], starting at `measure`.
+    /// Creates an iterator over the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`], starting at `measure`.
     ///
     /// This iterator will return values of type [`Option<(usize, M)>`], where
     /// the `usize` is the measure where the given [`M`][Measurable] starts.
@@ -519,7 +520,7 @@ where
     /// `measure` given to the function.
     ///
     /// If `measure == RopeSlice::measure()` then an iterator at the end of the
-    /// [`RopeSlice<M>`] is created (i.e. [`next()`][crate::iter::Iter::next]
+    /// [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`] is created (i.e. [`next()`][crate::iter::Iter::<M, LEAF_CAP, BRANCH_CAP>::next]
     /// will return [`None`]).
     ///
     /// Runs in O(log N) time.
@@ -533,7 +534,7 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Iter<'a, M> {
+    ) -> Iter<'a, M, LEAF_CAP, BRANCH_CAP> {
         if let Some(out) = self.get_iter_at(measure, cmp) {
             out
         } else {
@@ -545,34 +546,36 @@ where
         }
     }
 
-    /// Creates an iterator over the chunks of the [`RopeSlice<M>`].
+    /// Creates an iterator over the chunks of the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// Runs in O(log N) time.
     #[inline]
-    pub fn chunks(&self) -> Chunks<'a, M> {
+    pub fn chunks(&self) -> Chunks<'a, M, LEAF_CAP, BRANCH_CAP> {
         match *self {
             RopeSlice(RSEnum::Full {
                 node,
                 start_info,
                 end_info,
-            }) => Chunks::new_with_range(
+            }) => Chunks::<M, LEAF_CAP, BRANCH_CAP>::new_with_range(
                 node,
                 (start_info.len as usize, end_info.len as usize),
                 (start_info.measure, end_info.measure),
             ),
-            RopeSlice(RSEnum::Light { slice, .. }) => Chunks::from_slice(slice, false),
+            RopeSlice(RSEnum::Light { slice, .. }) => {
+                Chunks::<M, LEAF_CAP, BRANCH_CAP>::from_slice(slice, false)
+            }
         }
     }
 
-    /// Creates an iterator over the chunks of the [`RopeSlice<M>`], with the
+    /// Creates an iterator over the chunks of the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`], with the
     /// iterator starting at the chunk containing the `index`.
     ///
     /// Also returns the index and measure of the beginning of the first
     /// chunk to be yielded.
     ///
     /// If `index == RopeSlice::len()` an iterator at the end of the
-    /// [`RopeSlice<M>`] (yielding [`None`] on a call to
-    /// [`next()`][crate::iter::Iter::next]) is created.
+    /// [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`] (yielding [`None`] on a call to
+    /// [`next()`][crate::iter::Iter::<M, LEAF_CAP, BRANCH_CAP>::next]) is created.
     ///
     /// The return value is organized as `(iterator, chunk_index,
     /// chunk_measure)`.
@@ -584,7 +587,10 @@ where
     /// Panics if the `index` is out of bounds (i.e. `index >
     /// RopeSlice::len()`).
     #[inline]
-    pub fn chunks_at_index(&self, index: usize) -> (Chunks<'a, M>, usize, M::Measure) {
+    pub fn chunks_at_index(
+        &self,
+        index: usize,
+    ) -> (Chunks<'a, M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure) {
         if let Some(out) = self.get_chunks_at_index(index) {
             out
         } else {
@@ -596,15 +602,15 @@ where
         }
     }
 
-    /// Creates an iterator over the chunks of the [`RopeSlice<M>`], with the
+    /// Creates an iterator over the chunks of the [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`], with the
     /// iterator starting at the chunk containing the `measure`.
     ///
     /// Also returns the index and measure of the beginning of the first
     /// chunk to be yielded.
     ///
     /// If `measure == RopeSlice::measure()` an iterator at the end of the
-    /// [`RopeSlice<M>`] (yielding [`None`] on a call to
-    /// [`next()`][crate::iter::Iter::next]) is created.
+    /// [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`] (yielding [`None`] on a call to
+    /// [`next()`][crate::iter::Iter::<M, LEAF_CAP, BRANCH_CAP>::next]) is created.
     ///
     /// The return value is organized as `(iterator, chunk_index,
     /// chunk_measure)`.
@@ -620,7 +626,7 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> (Chunks<'a, M>, usize, M::Measure) {
+    ) -> (Chunks<'a, M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure) {
         if let Some(out) = self.get_chunks_at_measure(measure, cmp) {
             out
         } else {
@@ -636,13 +642,11 @@ where
 /// # Non-Panicking
 ///
 /// The methods in this impl block provide non-panicking versions of
-/// [`RopeSlice<M>`]'s panicking methods. They return either `Option::None` or
+/// [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`]'s panicking methods. They return either `Option::None` or
 /// `Result::Err()` when their panicking counterparts would have panicked.
-impl<'a, M> RopeSlice<'a, M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     /// Non-panicking version of
     /// [`index_to_measure()`][RopeSlice::index_to_measure].
@@ -803,7 +807,7 @@ where
         &self,
         range: impl MeasureRange<M>,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Option<RopeSlice<'a, M>> {
+    ) -> Option<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>> {
         let (start, end) = measures_from_range(&range, self.measure()).unwrap();
 
         if cmp(&start, &M::Measure::default()).is_eq() && cmp(&end, &self.measure()).is_eq() {
@@ -835,14 +839,20 @@ where
 
     /// Non-panicking version of [`index_slice()`][RopeSlice::index_slice].
     #[inline]
-    pub fn get_index_slice<R>(&self, index_range: R) -> Option<RopeSlice<'a, M>>
+    pub fn get_index_slice<R>(
+        &self,
+        index_range: R,
+    ) -> Option<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>>
     where
         R: RangeBounds<usize>,
     {
         self.get_slice_impl(index_range).ok()
     }
 
-    pub(crate) fn get_slice_impl<R>(&self, index_range: R) -> Result<RopeSlice<'a, M>, M>
+    pub(crate) fn get_slice_impl<R>(
+        &self,
+        index_range: R,
+    ) -> Result<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>, M>
     where
         R: RangeBounds<usize>,
     {
@@ -912,7 +922,7 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Option<Iter<'a, M>> {
+    ) -> Option<Iter<'a, M, LEAF_CAP, BRANCH_CAP>> {
         // Bounds check
         if cmp(&measure, &self.measure()).is_le() {
             match *self {
@@ -920,16 +930,16 @@ where
                     node,
                     start_info,
                     end_info,
-                }) => Some(Iter::new_with_range_at_measure(
+                }) => Some(Iter::<M, LEAF_CAP, BRANCH_CAP>::new_with_range_at_measure(
                     node,
                     start_info.measure + measure,
                     (start_info.len as usize, end_info.len as usize),
                     (start_info.measure, end_info.measure),
                     cmp,
                 )),
-                RopeSlice(RSEnum::Light { slice, .. }) => {
-                    Some(Iter::from_slice_at(slice, measure, &cmp))
-                }
+                RopeSlice(RSEnum::Light { slice, .. }) => Some(
+                    Iter::<M, LEAF_CAP, BRANCH_CAP>::from_slice_at(slice, measure, &cmp),
+                ),
             }
         } else {
             None
@@ -939,7 +949,10 @@ where
     /// Non-panicking version of
     /// [`chunks_at_index()`][RopeSlice::chunks_at_index].
     #[inline]
-    pub fn get_chunks_at_index(&self, index: usize) -> Option<(Chunks<'a, M>, usize, M::Measure)> {
+    pub fn get_chunks_at_index(
+        &self,
+        index: usize,
+    ) -> Option<(Chunks<'a, M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure)> {
         // Bounds check
         if index <= self.len() {
             match *self {
@@ -948,12 +961,13 @@ where
                     start_info,
                     end_info,
                 }) => {
-                    let (chunks, chunk_index, chunk_measure) = Chunks::new_with_range_at_index(
-                        node,
-                        index + start_info.len as usize,
-                        (start_info.len as usize, end_info.len as usize),
-                        (start_info.measure, end_info.measure),
-                    );
+                    let (chunks, chunk_index, chunk_measure) =
+                        Chunks::<M, LEAF_CAP, BRANCH_CAP>::new_with_range_at_index(
+                            node,
+                            index + start_info.len as usize,
+                            (start_info.len as usize, end_info.len as usize),
+                            (start_info.measure, end_info.measure),
+                        );
 
                     Some((
                         chunks,
@@ -962,7 +976,8 @@ where
                     ))
                 }
                 RopeSlice(RSEnum::Light { slice }) => {
-                    let chunks = Chunks::from_slice(slice, index == slice.len());
+                    let chunks =
+                        Chunks::<M, LEAF_CAP, BRANCH_CAP>::from_slice(slice, index == slice.len());
 
                     if index == slice.len() {
                         Some((chunks, slice.len(), measure_of(slice)))
@@ -983,7 +998,7 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Option<(Chunks<'a, M>, usize, M::Measure)> {
+    ) -> Option<(Chunks<'a, M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure)> {
         // Bounds check
         if cmp(&measure, &self.measure()).is_le() {
             match *self {
@@ -992,13 +1007,14 @@ where
                     start_info,
                     end_info,
                 }) => {
-                    let (chunks, chunk_index, chunk_measure) = Chunks::new_with_range_at_measure(
-                        node,
-                        measure + start_info.measure,
-                        (start_info.len as usize, end_info.len as usize),
-                        (start_info.measure, end_info.measure),
-                        cmp,
-                    );
+                    let (chunks, chunk_index, chunk_measure) =
+                        Chunks::<M, LEAF_CAP, BRANCH_CAP>::new_with_range_at_measure(
+                            node,
+                            measure + start_info.measure,
+                            (start_info.len as usize, end_info.len as usize),
+                            (start_info.measure, end_info.measure),
+                            cmp,
+                        );
 
                     Some((
                         chunks,
@@ -1008,7 +1024,10 @@ where
                 }
                 RopeSlice(RSEnum::Light { slice, .. }) => {
                     let slice_measure = measure_of(slice);
-                    let chunks = Chunks::from_slice(slice, cmp(&measure, &slice_measure).is_eq());
+                    let chunks = Chunks::<M, LEAF_CAP, BRANCH_CAP>::from_slice(
+                        slice,
+                        cmp(&measure, &slice_measure).is_eq(),
+                    );
 
                     if cmp(&measure, &slice_measure).is_eq() {
                         Some((chunks, slice.len(), slice_measure))
@@ -1026,25 +1045,24 @@ where
 //==============================================================
 // Conversion impls
 
-/// Creates a [`RopeSlice<M>`] directly from a [`&[M]`][Measurable] slice.
+/// Creates a [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`] directly from a [`&[M]`][Measurable] slice.
 ///
 /// The useful applications of this are actually somewhat narrow. It is
 /// intended primarily as an aid when implementing additional functionality
 /// on top of AnyRope, where you may already have access to a rope chunk and
-/// want to directly create a [`RopeSlice<M>`] from it, avoiding the overhead of
+/// want to directly create a [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`] from it, avoiding the overhead of
 /// going through the slicing APIs.
 ///
-/// Although it is possible to use this to create [`RopeSlice<M>`]s from
+/// Although it is possible to use this to create [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`]s from
 /// arbitrary lists, doing so is not especially useful. For example,
-/// [`Rope<M>`]s and [`RopeSlice<M>`]s can already be directly compared for
+/// [`Rope<M, LEAF_CAP, BRANCH_CAP>`]s and [`RopeSlice<M, LEAF_CAP, BRANCH_CAP>`]s can already be directly compared for
 /// equality with [`Vec<M>`] and [`&[M]`][Measurable] slices.
 ///
 /// Runs in O(N) time, where N is the length of the slice.
-impl<'a, M> From<&'a [M]> for RopeSlice<'a, M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> From<&'a [M]>
+    for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn from(slice: &'a [M]) -> Self {
@@ -1052,14 +1070,13 @@ where
     }
 }
 
-impl<'a, M> From<RopeSlice<'a, M>> for Vec<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    From<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>> for Vec<M>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn from(s: RopeSlice<'a, M>) -> Self {
+    fn from(s: RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>) -> Self {
         let mut vec = Vec::with_capacity(s.len());
         vec.extend(s.chunks().flat_map(|chunk| chunk.iter()).cloned());
         vec
@@ -1070,14 +1087,13 @@ where
 /// owned [`Vec<M>`] if the contents is not contiguous in memory.
 ///
 /// Runs in best case O(1), worst case O(N).
-impl<'a, M> From<RopeSlice<'a, M>> for std::borrow::Cow<'a, [M]>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    From<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>> for std::borrow::Cow<'a, [M]>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn from(s: RopeSlice<'a, M>) -> Self {
+    fn from(s: RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>) -> Self {
         if let Some(slice) = s.as_slice() {
             std::borrow::Cow::Borrowed(slice)
         } else {
@@ -1089,22 +1105,20 @@ where
 //==============================================================
 // Other impls
 
-impl<'a, M> std::fmt::Debug for RopeSlice<'a, M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::fmt::Debug
+    for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + std::fmt::Debug,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_list().entries(self.chunks()).finish()
     }
 }
 
-impl<'a, M> std::fmt::Display for RopeSlice<'a, M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::fmt::Display
+    for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + std::fmt::Display,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -1122,21 +1136,20 @@ where
     }
 }
 
-impl<'a, M> std::cmp::Eq for RopeSlice<'a, M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::cmp::Eq
+    for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + Eq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
 }
 
-impl<'a, 'b, M> std::cmp::PartialEq<RopeSlice<'b, M>> for RopeSlice<'a, M>
+impl<'a, 'b, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<RopeSlice<'b, M, LEAF_CAP, BRANCH_CAP>>
+    for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
-    fn eq(&self, other: &RopeSlice<'b, M>) -> bool {
+    fn eq(&self, other: &RopeSlice<'b, M, LEAF_CAP, BRANCH_CAP>) -> bool {
         if self.len() != other.len() {
             return false;
         }
@@ -1182,11 +1195,10 @@ where
     }
 }
 
-impl<'a, 'b, M> std::cmp::PartialEq<&'b [M]> for RopeSlice<'a, M>
+impl<'a, 'b, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::cmp::PartialEq<&'b [M]>
+    for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn eq(&self, other: &&'b [M]) -> bool {
@@ -1213,23 +1225,21 @@ where
     }
 }
 
-impl<'a, 'b, M> std::cmp::PartialEq<RopeSlice<'a, M>> for &'b [M]
+impl<'a, 'b, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>> for &'b [M]
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &RopeSlice<'a, M>) -> bool {
+    fn eq(&self, other: &RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>) -> bool {
         other == self
     }
 }
 
-impl<'a, M> std::cmp::PartialEq<[M]> for RopeSlice<'a, M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::cmp::PartialEq<[M]>
+    for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn eq(&self, other: &[M]) -> bool {
@@ -1237,23 +1247,21 @@ where
     }
 }
 
-impl<'a, M> std::cmp::PartialEq<RopeSlice<'a, M>> for [M]
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>> for [M]
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &RopeSlice<'a, M>) -> bool {
+    fn eq(&self, other: &RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>) -> bool {
         std::cmp::PartialEq::<&[M]>::eq(other, &self)
     }
 }
 
-impl<'a, M> std::cmp::PartialEq<Vec<M>> for RopeSlice<'a, M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::cmp::PartialEq<Vec<M>>
+    for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn eq(&self, other: &Vec<M>) -> bool {
@@ -1261,23 +1269,21 @@ where
     }
 }
 
-impl<'a, M> std::cmp::PartialEq<RopeSlice<'a, M>> for Vec<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>> for Vec<M>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &RopeSlice<'a, M>) -> bool {
+    fn eq(&self, other: &RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>) -> bool {
         self.as_slice() == other
     }
 }
 
-impl<'a, 'b, M> std::cmp::PartialEq<std::borrow::Cow<'b, [M]>> for RopeSlice<'a, M>
+impl<'a, 'b, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<std::borrow::Cow<'b, [M]>> for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn eq(&self, other: &std::borrow::Cow<'b, [M]>) -> bool {
@@ -1285,50 +1291,46 @@ where
     }
 }
 
-impl<'a, 'b, M> std::cmp::PartialEq<RopeSlice<'a, M>> for std::borrow::Cow<'b, [M]>
+impl<'a, 'b, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>> for std::borrow::Cow<'b, [M]>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &RopeSlice<'a, M>) -> bool {
+    fn eq(&self, other: &RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>) -> bool {
         **self == *other
     }
 }
 
-impl<'a, M> std::cmp::PartialEq<Rope<M>> for RopeSlice<'a, M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<Rope<M, LEAF_CAP, BRANCH_CAP>> for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &Rope<M>) -> bool {
+    fn eq(&self, other: &Rope<M, LEAF_CAP, BRANCH_CAP>) -> bool {
         *self == other.measure_slice(.., M::Measure::fallible_cmp)
     }
 }
 
-impl<'a, M> std::cmp::PartialEq<RopeSlice<'a, M>> for Rope<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>> for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &RopeSlice<'a, M>) -> bool {
+    fn eq(&self, other: &RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>) -> bool {
         self.measure_slice(.., M::Measure::fallible_cmp) == *other
     }
 }
 
-impl<'a, M> std::cmp::Ord for RopeSlice<'a, M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::cmp::Ord
+    for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + Ord,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[allow(clippy::op_ref)] // Erroneously thinks with can directly use a slice.
-    fn cmp(&self, other: &RopeSlice<'a, M>) -> std::cmp::Ordering {
+    fn cmp(&self, other: &RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>) -> std::cmp::Ordering {
         let mut chunk_itr_1 = self.chunks();
         let mut chunk_itr_2 = other.chunks();
         let mut chunk1 = chunk_itr_1.next().unwrap_or(&[]);
@@ -1374,14 +1376,17 @@ where
     }
 }
 
-impl<'a, 'b, M> std::cmp::PartialOrd<RopeSlice<'b, M>> for RopeSlice<'a, M>
+impl<'a, 'b, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialOrd<RopeSlice<'b, M, LEAF_CAP, BRANCH_CAP>>
+    for RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialOrd + Ord,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn partial_cmp(&self, other: &RopeSlice<'b, M>) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(
+        &self,
+        other: &RopeSlice<'b, M, LEAF_CAP, BRANCH_CAP>,
+    ) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -1391,8 +1396,8 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        slice_utils::{index_to_measure, start_measure_to_index},
         Rope, Width,
+        slice_utils::{index_to_measure, start_measure_to_index},
     };
 
     /// 70 elements, total measure of 135.
@@ -1416,42 +1421,42 @@ mod tests {
 
     #[test]
     fn len_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(7..30, usize::cmp);
         assert_eq!(slice.len(), 13);
     }
 
     #[test]
     fn len_02() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(43..43, usize::cmp);
         assert_eq!(slice.len(), 0);
     }
 
     #[test]
     fn measure_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(7..30, usize::cmp);
         assert_eq!(slice.measure(), 23);
     }
 
     #[test]
     fn measure_02() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(43..43, usize::cmp);
         assert_eq!(slice.measure(), 0);
     }
 
     #[test]
     fn measure_03() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(6..30, usize::cmp);
         assert_eq!(slice.measure(), 24);
     }
 
     #[test]
     fn index_to_measure_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(88.., usize::cmp);
 
         assert_eq!(slice.index_to_measure(0), 0); // Width(0): 0
@@ -1472,7 +1477,7 @@ mod tests {
 
     #[test]
     fn measure_to_index_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(88..135, usize::cmp);
 
         // NOTE: For some elements, it may seem like the amount of "measures"
@@ -1503,7 +1508,7 @@ mod tests {
 
     #[test]
     fn from_index_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(34..100, usize::cmp);
 
         assert_eq!(slice.from_index(0), (0, Width(0)));
@@ -1517,7 +1522,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn from_index_02() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(34..100, usize::cmp);
         slice.from_index(slice.len());
     }
@@ -1525,14 +1530,14 @@ mod tests {
     #[test]
     #[should_panic]
     fn from_index_03() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(42..42, usize::cmp);
         slice.from_index(0);
     }
 
     #[test]
     fn from_measure_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(34..100, usize::cmp);
 
         assert_eq!(slice.from_measure(0, usize::cmp), (0, Width(0)));
@@ -1546,7 +1551,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn from_measure_02() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(34..100, usize::cmp);
         slice.from_measure(66, usize::cmp);
     }
@@ -1554,14 +1559,14 @@ mod tests {
     #[test]
     #[should_panic]
     fn from_measure_03() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(43..43, usize::cmp);
         slice.from_measure(0, usize::cmp);
     }
 
     #[test]
     fn chunk_at_index_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(34..135, usize::cmp);
         let slice_2 = &pseudo_random()[17..70];
         // "'slice a fine day, isn't it?\nAren't you glad \
@@ -1591,7 +1596,7 @@ mod tests {
 
     #[test]
     fn chunk_at_measure_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(34..96, usize::cmp);
         let slice_2 = &pseudo_random()[17..51];
 
@@ -1623,7 +1628,7 @@ mod tests {
 
     #[test]
     fn slice_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(.., usize::cmp);
 
         let slice_2 = slice_1.measure_slice(.., usize::cmp);
@@ -1633,7 +1638,7 @@ mod tests {
 
     #[test]
     fn slice_02() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(5..43, usize::cmp);
 
         let slice_2 = slice_1.measure_slice(3..25, usize::cmp);
@@ -1643,7 +1648,7 @@ mod tests {
 
     #[test]
     fn slice_03() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(31..97, usize::cmp);
 
         let slice_2 = slice_1.measure_slice(7..64, usize::cmp);
@@ -1653,7 +1658,7 @@ mod tests {
 
     #[test]
     fn slice_04() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(5..43, usize::cmp);
 
         // A range in the middle of a list of 0 elements should capture all of
@@ -1666,7 +1671,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn slice_05() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(5..43, usize::cmp);
 
         #[allow(clippy::reversed_empty_ranges)]
@@ -1676,7 +1681,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn slice_07() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(5..43, usize::cmp);
 
         slice.measure_slice(37..39, usize::cmp);
@@ -1684,7 +1689,7 @@ mod tests {
 
     #[test]
     fn eq_slice_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(.., usize::cmp);
 
         assert_eq!(slice, pseudo_random());
@@ -1693,7 +1698,7 @@ mod tests {
 
     #[test]
     fn eq_slice_02() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(0..20, usize::cmp);
 
         assert_ne!(slice, pseudo_random());
@@ -1702,7 +1707,7 @@ mod tests {
 
     #[test]
     fn eq_slice_03() {
-        let mut rope = Rope::from_slice(pseudo_random().as_slice());
+        let mut rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         rope.remove_inclusive(20..20, usize::cmp);
         rope.insert_slice(20, &[Width(5)], usize::cmp);
         let slice = rope.measure_slice(.., usize::cmp);
@@ -1713,7 +1718,7 @@ mod tests {
 
     #[test]
     fn eq_slice_04() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(.., usize::cmp);
         let vec: Vec<Width> = rope.clone().into();
 
@@ -1723,7 +1728,7 @@ mod tests {
 
     #[test]
     fn eq_rope_slice_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(43..43, usize::cmp);
 
         assert_eq!(slice, slice);
@@ -1731,7 +1736,7 @@ mod tests {
 
     #[test]
     fn eq_rope_slice_02() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(43..97, usize::cmp);
         let slice_2 = rope.measure_slice(43..97, usize::cmp);
 
@@ -1740,7 +1745,7 @@ mod tests {
 
     #[test]
     fn eq_rope_slice_03() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(43..43, usize::cmp);
         let slice_2 = rope.measure_slice(43..45, usize::cmp);
 
@@ -1749,7 +1754,7 @@ mod tests {
 
     #[test]
     fn eq_rope_slice_04() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(43..45, usize::cmp);
         let slice_2 = rope.measure_slice(43..43, usize::cmp);
 
@@ -1758,7 +1763,7 @@ mod tests {
 
     #[test]
     fn eq_rope_slice_05() {
-        let rope: Rope<Width> = Rope::from_slice([].as_slice());
+        let rope: Rope<Width, 9, 5> = Rope::<Width, 9, 5>::from_slice([].as_slice());
         let slice = rope.measure_slice(0..0, usize::cmp);
 
         assert_eq!(slice, slice);
@@ -1766,8 +1771,8 @@ mod tests {
 
     #[test]
     fn cmp_rope_slice_01() {
-        let rope_1 = Rope::from_slice(pseudo_random().as_slice());
-        let rope_2 = Rope::from_slice(pseudo_random().as_slice());
+        let rope_1 = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
+        let rope_2 = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope_1.measure_slice(.., usize::cmp);
         let slice_2 = rope_2.measure_slice(.., usize::cmp);
 
@@ -1784,8 +1789,8 @@ mod tests {
 
     #[test]
     fn cmp_rope_slice_02() {
-        let rope_1 = Rope::from_slice(&[Width(3), Width(1), Width(2), Width(1)]);
-        let rope_2 = Rope::from_slice(&[Width(3), Width(0), Width(2), Width(1)]);
+        let rope_1 = Rope::<Width, 9, 5>::from_slice(&[Width(3), Width(1), Width(2), Width(1)]);
+        let rope_2 = Rope::<Width, 9, 5>::from_slice(&[Width(3), Width(0), Width(2), Width(1)]);
         let slice_1 = rope_1.measure_slice(.., usize::cmp);
         let slice_2 = rope_2.measure_slice(.., usize::cmp);
 
@@ -1795,7 +1800,7 @@ mod tests {
 
     #[test]
     fn to_vec_01() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(.., usize::cmp);
         let vec: Vec<Width> = slice.into();
 
@@ -1805,7 +1810,7 @@ mod tests {
 
     #[test]
     fn to_vec_02() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(0..24, usize::cmp);
         let vec: Vec<Width> = slice.into();
 
@@ -1814,7 +1819,7 @@ mod tests {
 
     #[test]
     fn to_vec_03() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(13..89, usize::cmp);
         let vec: Vec<Width> = slice.into();
 
@@ -1823,7 +1828,7 @@ mod tests {
 
     #[test]
     fn to_vec_04() {
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(13..41, usize::cmp);
         let vec: Vec<Width> = slice.into();
 
@@ -1833,7 +1838,7 @@ mod tests {
     #[test]
     fn to_cow_01() {
         use std::borrow::Cow;
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(13..83, usize::cmp);
         let cow: Cow<[Width]> = slice.into();
 
@@ -1843,7 +1848,7 @@ mod tests {
     #[test]
     fn to_cow_02() {
         use std::borrow::Cow;
-        let rope = Rope::from_slice(pseudo_random().as_slice());
+        let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice = rope.measure_slice(13..14, usize::cmp);
         let cow: Cow<[Width]> = rope.measure_slice(13..14, usize::cmp).into();
 

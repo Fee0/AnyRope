@@ -3,12 +3,12 @@ use std::sync::Arc;
 use smallvec::SmallVec;
 
 use crate::{
+    DEFAULT_BRANCH_CAP, DEFAULT_LEAF_CAP, FallibleOrd, Measurable,
     rope::Rope,
-    tree::{max_children, max_len, min_len, BranchChildren, LeafSlice, Node, SliceInfo},
-    FallibleOrd, Measurable,
+    tree::{BranchChildren, LeafSlice, Node, SliceInfo, assert_valid_capacities, min_len},
 };
 
-/// An efficient incremental [`Rope<M>`] builder.
+/// An efficient incremental [`Rope<M, LEAF_CAP, BRANCH_CAP>`] builder.
 ///
 /// This is used to efficiently build ropes from sequences of [`M`][Measurable]
 /// chunks.
@@ -22,7 +22,7 @@ use crate::{
 /// # use any_rope::RopeBuilder;
 /// # use any_rope::Width;
 /// #
-/// let mut builder = RopeBuilder::new();
+/// let mut builder = RopeBuilder::<Width>::new();
 ///
 /// builder.append(Width(1));
 /// builder.append(Width(2));
@@ -38,25 +38,25 @@ use crate::{
 /// );
 /// ```
 #[derive(Debug, Clone)]
-pub struct RopeBuilder<M>
-where
+pub struct RopeBuilder<
+    M,
+    const LEAF_CAP: usize = DEFAULT_LEAF_CAP,
+    const BRANCH_CAP: usize = DEFAULT_BRANCH_CAP,
+> where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
-    stack: SmallVec<[Arc<Node<M>>; 4]>,
+    stack: SmallVec<[Arc<Node<M, LEAF_CAP, BRANCH_CAP>>; 4]>,
     buffer: Vec<M>,
     last_chunk_len: usize,
 }
 
-impl<M> RopeBuilder<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> RopeBuilder<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     /// Creates a new RopeBuilder, ready for input.
     pub fn new() -> Self {
+        assert_valid_capacities::<LEAF_CAP, BRANCH_CAP>();
         RopeBuilder {
             stack: {
                 let mut stack = SmallVec::new();
@@ -68,29 +68,29 @@ where
         }
     }
 
-    /// Appends `chunk` to the end of the in-progress [`Rope<M>`].
+    /// Appends `chunk` to the end of the in-progress [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// Call this method repeatedly to incrementally build up a
-    /// [`Rope<M>`]. The passed slice chunk can be as large or small as
+    /// [`Rope<M, LEAF_CAP, BRANCH_CAP>`]. The passed slice chunk can be as large or small as
     /// desired, but larger chunks are more efficient.
     pub fn append_slice(&mut self, chunk: &[M]) {
         self.append_internal(chunk, false);
     }
 
     /// Appends a single [`M`][Measurable] to the end of the in-progress
-    /// [`Rope<M>`]
+    /// [`Rope<M, LEAF_CAP, BRANCH_CAP>`]
     ///
-    /// Call this method repeatedly to incrementally build up a [`Rope<M>`].
+    /// Call this method repeatedly to incrementally build up a [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
     pub fn append(&mut self, element: M) {
         self.append_internal(&[element], false);
     }
 
-    /// Finishes the build, and returns the [`Rope<M>`].
+    /// Finishes the build, and returns the [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// Note: this method consumes the builder. If you want to continue
     /// building other ropes with the same prefix, you can clone the builder
     /// before calling this function.
-    pub fn finish(mut self) -> Rope<M> {
+    pub fn finish(mut self) -> Rope<M, LEAF_CAP, BRANCH_CAP> {
         // Append the last leaf
         self.append_internal(&[], true);
         self.finish_internal(true)
@@ -101,7 +101,7 @@ where
     /// This avoids the creation and use of the internal buffer. This is
     /// for internal use only, because the public-facing API has
     /// [Rope::from_slice()], which actually uses this for its implementation.
-    pub(crate) fn build_at_once(mut self, chunk: &[M]) -> Rope<M> {
+    pub(crate) fn build_at_once(mut self, chunk: &[M]) -> Rope<M, LEAF_CAP, BRANCH_CAP> {
         self.append_internal(chunk, true);
         self.finish_internal(true)
     }
@@ -118,7 +118,7 @@ where
     /// conjunction with it.
     #[doc(hidden)]
     pub fn _append_chunk(&mut self, contents: &[M]) {
-        let leaf_slice = LeafSlice::from_slice(contents);
+        let leaf_slice = LeafSlice::<M, LEAF_CAP>::from_slice(contents);
         let info = SliceInfo::<M::Measure>::from_slice(&leaf_slice);
         self.append_leaf_node(Arc::new(Node::Leaf(leaf_slice, info)));
     }
@@ -129,7 +129,7 @@ where
     /// to the btree invariants. To be used with [RopeBuilder::append_chunk()]
     /// to construct ropes with specific chunk boundaries for testing.
     #[doc(hidden)]
-    pub fn _finish_no_fix(self) -> Rope<M> {
+    pub fn _finish_no_fix(self) -> Rope<M, LEAF_CAP, BRANCH_CAP> {
         self.finish_internal(false)
     }
 
@@ -152,13 +152,13 @@ where
             match leaf_slice {
                 NextSlice::None => break,
                 NextSlice::UseBuffer => {
-                    let leaf_slice = LeafSlice::from_slice(self.buffer.as_slice());
+                    let leaf_slice = LeafSlice::<M, LEAF_CAP>::from_slice(self.buffer.as_slice());
                     let info = SliceInfo::<M::Measure>::from_slice(&leaf_slice);
                     self.append_leaf_node(Arc::new(Node::Leaf(leaf_slice, info)));
                     self.buffer.clear();
                 }
                 NextSlice::Slice(s) => {
-                    let leaf_slice = LeafSlice::from_slice(s);
+                    let leaf_slice = LeafSlice::<M, LEAF_CAP>::from_slice(s);
                     let info = SliceInfo::<M::Measure>::from_slice(&leaf_slice);
                     self.append_leaf_node(Arc::new(Node::Leaf(leaf_slice, info)));
                 }
@@ -171,7 +171,7 @@ where
     // When `fix_tree` is false, the resulting node tree is NOT fixed up
     // to adhere to the btree invariants. This is useful for some testing
     // code. But generally, `fix_tree` should be set to true.
-    fn finish_internal(mut self, fix_tree: bool) -> Rope<M> {
+    fn finish_internal(mut self, fix_tree: bool) -> Rope<M, LEAF_CAP, BRANCH_CAP> {
         // Zip up all the remaining nodes on the stack
         let mut stack_index = self.stack.len() - 1;
         while stack_index >= 1 {
@@ -193,8 +193,7 @@ where
         // Fix up the tree to be well-formed.
         if fix_tree {
             Arc::make_mut(&mut rope.root).zip_fix_right();
-            if self.last_chunk_len < min_len::<M, M::Measure>() && self.last_chunk_len != rope.len()
-            {
+            if self.last_chunk_len < min_len(LEAF_CAP) && self.last_chunk_len != rope.len() {
                 // Merge the last chunk if it was too small.
                 let index =
                     rope.measure() - rope.index_to_measure(rope.len() - self.last_chunk_len);
@@ -214,14 +213,14 @@ where
         is_last_chunk: bool,
     ) -> (NextSlice<'a, M>, &'a [M]) {
         assert!(
-            self.buffer.len() < max_len::<M, M::Measure>(),
+            self.buffer.len() < LEAF_CAP,
             "RopeBuilder: buffer is already full when receiving a chunk! This should never happen!",
         );
 
         // Simplest case: empty buffer and enough in `slice` for a full
         // chunk, so just chop a chunk off from `slice` and use that.
-        if self.buffer.is_empty() && slice.len() >= max_len::<M, M::Measure>() {
-            let split_index = max_len::<M, M::Measure>().min(slice.len() - 1);
+        if self.buffer.is_empty() && slice.len() >= LEAF_CAP {
+            let split_index = LEAF_CAP.min(slice.len() - 1);
             return (
                 NextSlice::Slice(&slice[..split_index]),
                 &slice[split_index..],
@@ -229,8 +228,8 @@ where
         }
         // If the buffer + `slice` is enough for a full chunk, push enough
         // of `slice` onto the buffer to fill it and use that.
-        else if (slice.len() + self.buffer.len()) >= max_len::<M, M::Measure>() {
-            let split_index = max_len::<M, M::Measure>() - self.buffer.len();
+        else if (slice.len() + self.buffer.len()) >= LEAF_CAP {
+            let split_index = LEAF_CAP - self.buffer.len();
             self.buffer.extend_from_slice(&slice[..split_index]);
             return (NextSlice::UseBuffer, &slice[split_index..]);
         }
@@ -257,7 +256,7 @@ where
         }
     }
 
-    fn append_leaf_node(&mut self, leaf: Arc<Node<M>>) {
+    fn append_leaf_node(&mut self, leaf: Arc<Node<M, LEAF_CAP, BRANCH_CAP>>) {
         let last = self.stack.pop().unwrap();
         match *last {
             Node::Leaf(_, _) => {
@@ -282,9 +281,7 @@ where
                         children.push((left.info(), left));
                         self.stack.insert(0, Arc::new(Node::Branch(children)));
                         break;
-                    } else if self.stack[stack_index as usize].child_count()
-                        < (max_children::<M, M::Measure>() - 1)
-                    {
+                    } else if self.stack[stack_index as usize].child_count() < (BRANCH_CAP - 1) {
                         // There's room to add a child, so do that.
                         Arc::make_mut(&mut self.stack[stack_index as usize])
                             .children_mut()
@@ -306,11 +303,10 @@ where
     }
 }
 
-impl<M> Default for RopeBuilder<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> Default
+    for RopeBuilder<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn default() -> Self {
         Self::new()
@@ -320,8 +316,6 @@ where
 enum NextSlice<'a, M>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     None,
     UseBuffer,
@@ -356,7 +350,7 @@ mod tests {
 
     #[test]
     fn rope_builder_01() {
-        let mut builder = RopeBuilder::new();
+        let mut builder = RopeBuilder::<Width, 9, 5>::new();
 
         for _ in 0..5 {
             builder.append_slice(&[Width(1), Width(2), Width(4), Width(0), Width(0)]);
@@ -375,7 +369,7 @@ mod tests {
 
     #[test]
     fn rope_builder_02() {
-        let mut builder = RopeBuilder::new();
+        let mut builder = RopeBuilder::<Width, 9, 5>::new();
 
         for _ in 0..5 {
             builder.append(Width(1));
@@ -402,7 +396,7 @@ mod tests {
 
     #[test]
     fn rope_builder_default_01() {
-        let mut builder = RopeBuilder::default();
+        let mut builder = RopeBuilder::<Width, 9, 5>::default();
 
         for _ in 0..5 {
             builder.append_slice(&[Width(1), Width(2), Width(4), Width(0), Width(0)]);

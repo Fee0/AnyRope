@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::{
-    tree::{max_children, max_len, Node, SliceInfo},
     Measurable,
+    tree::{DEFAULT_BRANCH_CAP, DEFAULT_LEAF_CAP, Node, SliceInfo},
 };
 
 /// A fixed-capacity vec of child Arc-pointers and child metadata.
@@ -17,17 +17,17 @@ use crate::{
 /// lower down in this file.
 #[derive(Clone)]
 #[repr(C)]
-pub(crate) struct BranchChildren<M>(inner::BranchChildrenInternal<M>)
+pub(crate) struct BranchChildren<
+    M,
+    const LEAF_CAP: usize = DEFAULT_LEAF_CAP,
+    const BRANCH_CAP: usize = DEFAULT_BRANCH_CAP,
+>(inner::BranchChildrenInternal<M, LEAF_CAP, BRANCH_CAP>)
 where
-    M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized;
+    M: Measurable;
 
-impl<M> BranchChildren<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> BranchChildren<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     /// Creates a new empty array.
     pub fn new() -> Self {
@@ -41,16 +41,16 @@ where
 
     /// Returns whether the array is full or not.
     pub fn is_full(&self) -> bool {
-        self.len() == max_children::<M, M::Measure>()
+        self.len() == BRANCH_CAP
     }
 
     /// Access to the nodes array.
-    pub fn nodes(&self) -> &[Arc<Node<M>>] {
+    pub fn nodes(&self) -> &[Arc<Node<M, LEAF_CAP, BRANCH_CAP>>] {
         self.0.nodes()
     }
 
     /// Mutable access to the nodes array.
-    pub fn nodes_mut(&mut self) -> &mut [Arc<Node<M>>] {
+    pub fn nodes_mut(&mut self) -> &mut [Arc<Node<M, LEAF_CAP, BRANCH_CAP>>] {
         self.0.nodes_mut()
     }
 
@@ -65,7 +65,12 @@ where
     }
 
     /// Mutable access to both the info and nodes arrays simultaneously.
-    pub fn data_mut(&mut self) -> (&mut [SliceInfo<M::Measure>], &mut [Arc<Node<M>>]) {
+    pub fn data_mut(
+        &mut self,
+    ) -> (
+        &mut [SliceInfo<M::Measure>],
+        &mut [Arc<Node<M, LEAF_CAP, BRANCH_CAP>>],
+    ) {
         self.0.data_mut()
     }
 
@@ -78,7 +83,7 @@ where
     /// Pushes an item into the end of the array.
     ///
     /// Increases length by one. Panics if already full.
-    pub fn push(&mut self, item: (SliceInfo<M::Measure>, Arc<Node<M>>)) {
+    pub fn push(&mut self, item: (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>)) {
         self.0.push(item)
     }
 
@@ -86,7 +91,10 @@ where
     /// returning the right half.
     ///
     /// This works even when the array is full.
-    pub fn push_split(&mut self, new_child: (SliceInfo<M::Measure>, Arc<Node<M>>)) -> Self {
+    pub fn push_split(
+        &mut self,
+        new_child: (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>),
+    ) -> Self {
         let r_count = (self.len() + 1) / 2;
         let l_count = (self.len() + 1) - r_count;
 
@@ -112,7 +120,7 @@ where
             match *node1 {
                 Node::Leaf(ref mut slice1, ref mut info1) => {
                     if let Node::Leaf(ref mut slice2, ref mut info2) = *node2 {
-                        if (slice1.len() + slice2.len()) <= max_children::<M, M::Measure>() {
+                        if (slice1.len() + slice2.len()) <= BRANCH_CAP {
                             slice1.push_slice(slice2);
                             *info1 = SliceInfo::<M::Measure>::from_slice(slice1);
                             true
@@ -130,7 +138,7 @@ where
 
                 Node::Branch(ref mut children1) => {
                     if let Node::Branch(ref mut children2) = *node2 {
-                        if (children1.len() + children2.len()) <= max_children::<M, M::Measure>() {
+                        if (children1.len() + children2.len()) <= BRANCH_CAP {
                             for _ in 0..children2.len() {
                                 children1.push(children2.remove(0));
                             }
@@ -179,7 +187,7 @@ where
         let mut i = 1;
         while i < self.len() {
             if (self.nodes()[i - 1].leaf_slice().len() + self.nodes()[i].leaf_slice().len())
-                <= max_len::<M, M::Measure>()
+                <= LEAF_CAP
             {
                 // Scope to contain borrows
                 {
@@ -192,7 +200,7 @@ where
                     }
                 }
                 self.remove(i);
-            } else if self.nodes()[i - 1].leaf_slice().len() < max_len::<M, M::Measure>() {
+            } else if self.nodes()[i - 1].leaf_slice().len() < LEAF_CAP {
                 // Scope to contain borrows
                 {
                     let ((_, node_l), (_, node_r)) = self.get_two_mut(i - 1, i);
@@ -200,7 +208,7 @@ where
                     let node_r = Arc::make_mut(node_r);
                     if let Node::Leaf(ref mut slice_l, ref mut info_l) = *node_l {
                         if let Node::Leaf(ref mut slice_r, ref mut info_r) = *node_r {
-                            let split_index_r = max_len::<M, M::Measure>() - slice_l.len();
+                            let split_index_r = LEAF_CAP - slice_l.len();
                             slice_l.push_slice(&slice_r[..split_index_r]);
                             slice_r.truncate_front(split_index_r);
                             *info_l = SliceInfo::<M::Measure>::from_slice(slice_l);
@@ -222,7 +230,7 @@ where
     /// Pops an item off the end of the array and returns it.
     ///
     /// Decreases length by one. Panics if already empty.
-    pub fn pop(&mut self) -> (SliceInfo<M::Measure>, Arc<Node<M>>) {
+    pub fn pop(&mut self) -> (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>) {
         self.0.pop()
     }
 
@@ -230,7 +238,11 @@ where
     ///
     /// Increases length by one. Panics if already full. Preserves ordering
     /// of the other items.
-    pub fn insert(&mut self, index: usize, item: (SliceInfo<M::Measure>, Arc<Node<M>>)) {
+    pub fn insert(
+        &mut self,
+        index: usize,
+        item: (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>),
+    ) {
         self.0.insert(index, item)
     }
 
@@ -241,7 +253,7 @@ where
     pub fn insert_split(
         &mut self,
         index: usize,
-        item: (SliceInfo<M::Measure>, Arc<Node<M>>),
+        item: (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>),
     ) -> Self {
         assert!(self.len() > 0);
         assert!(index <= self.len());
@@ -259,7 +271,10 @@ where
     /// Removes the item at the given index from the the array.
     ///
     /// Decreases length by one. Preserves ordering of the other items.
-    pub fn remove(&mut self, index: usize) -> (SliceInfo<M::Measure>, Arc<Node<M>>) {
+    pub fn remove(
+        &mut self,
+        index: usize,
+    ) -> (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>) {
         self.0.remove(index)
     }
 
@@ -288,8 +303,14 @@ where
         index1: usize,
         index2: usize,
     ) -> (
-        (&mut SliceInfo<M::Measure>, &mut Arc<Node<M>>),
-        (&mut SliceInfo<M::Measure>, &mut Arc<Node<M>>),
+        (
+            &mut SliceInfo<M::Measure>,
+            &mut Arc<Node<M, LEAF_CAP, BRANCH_CAP>>,
+        ),
+        (
+            &mut SliceInfo<M::Measure>,
+            &mut Arc<Node<M, LEAF_CAP, BRANCH_CAP>>,
+        ),
     ) {
         assert!(index1 < index2);
         assert!(index2 < self.len());
@@ -309,7 +330,10 @@ where
     }
 
     /// Creates an iterator over the array's items.
-    pub fn iter(&self) -> Zip<slice::Iter<SliceInfo<M::Measure>>, slice::Iter<Arc<Node<M>>>> {
+    pub fn iter(
+        &self,
+    ) -> Zip<slice::Iter<SliceInfo<M::Measure>>, slice::Iter<Arc<Node<M, LEAF_CAP, BRANCH_CAP>>>>
+    {
         Iterator::zip(self.info().iter(), self.nodes().iter())
     }
 
@@ -521,12 +545,11 @@ where
     }
 }
 
-impl<M> fmt::Debug for BranchChildren<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> fmt::Debug
+    for BranchChildren<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + fmt::Debug,
     M::Measure: fmt::Debug,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("NodeChildren")
@@ -539,11 +562,11 @@ where
 
 //===========================================================================
 
-/// The unsafe guts of [`BranchChildren<M>`][super::BranchChildren], exposed
+/// The unsafe guts of [`BranchChildren<M, LEAF_CAP, BRANCH_CAP>`][super::BranchChildren], exposed
 /// through a safe API.
 ///
 /// Try to keep this as small as possible, and implement functionality on
-/// [`BranchChildren<M>`][super::BranchChildren] via the safe APIs whenever
+/// [`BranchChildren<M, LEAF_CAP, BRANCH_CAP>`][super::BranchChildren] via the safe APIs whenever
 /// possible.
 ///
 /// It's split out this way because it was too easy to accidentally access the
@@ -554,32 +577,29 @@ where
 mod inner {
     use std::{mem, mem::MaybeUninit, ptr, sync::Arc};
 
-    use super::{max_children, Node, SliceInfo};
-    use crate::{tree::max_len, Measurable};
+    use super::{Node, SliceInfo};
+    use crate::Measurable;
 
     /// This is essentially a fixed-capacity, stack-allocated [Vec<(M,
     /// SliceInfo)>].
     #[repr(C)]
-    pub(crate) struct BranchChildrenInternal<M>
+    pub(crate) struct BranchChildrenInternal<M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
     where
         M: Measurable,
-        [(); max_len::<M, M::Measure>()]: Sized,
-        [(); max_children::<M, M::Measure>()]: Sized,
     {
         /// An array of the child nodes.
         /// INVARIANT: The nodes from 0..len must be initialized
-        nodes: [MaybeUninit<Arc<Node<M>>>; max_children::<M, M::Measure>()],
+        nodes: [MaybeUninit<Arc<Node<M, LEAF_CAP, BRANCH_CAP>>>; BRANCH_CAP],
         /// An array of the child node [`SliceInfo`]s
         /// INVARIANT: The nodes from 0..len must be initialized
-        info: [MaybeUninit<SliceInfo<M::Measure>>; max_children::<M, M::Measure>()],
+        info: [MaybeUninit<SliceInfo<M::Measure>>; BRANCH_CAP],
         len: u8,
     }
 
-    impl<M> BranchChildrenInternal<M>
+    impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+        BranchChildrenInternal<M, LEAF_CAP, BRANCH_CAP>
     where
         M: Measurable,
-        [(); max_len::<M, M::Measure>()]: Sized,
-        [(); max_children::<M, M::Measure>()]: Sized,
     {
         /// Creates a new empty array.
         #[inline(always)]
@@ -601,7 +621,7 @@ mod inner {
 
         /// Access to the nodes array.
         #[inline(always)]
-        pub fn nodes(&self) -> &[Arc<Node<M>>] {
+        pub fn nodes(&self) -> &[Arc<Node<M, LEAF_CAP, BRANCH_CAP>>] {
             // SAFETY: MaybeUninit<T> is layout compatible with T, and
             // the nodes from 0..len are guaranteed to be initialized
             unsafe { mem::transmute(&self.nodes[..(self.len())]) }
@@ -609,7 +629,7 @@ mod inner {
 
         /// Mutable access to the nodes array.
         #[inline(always)]
-        pub fn nodes_mut(&mut self) -> &mut [Arc<Node<M>>] {
+        pub fn nodes_mut(&mut self) -> &mut [Arc<Node<M, LEAF_CAP, BRANCH_CAP>>] {
             // SAFETY: MaybeUninit<T> is layout compatible with T, and
             // the nodes from 0..len are guaranteed to be initialized
             unsafe { mem::transmute(&mut self.nodes[..(self.len as usize)]) }
@@ -633,7 +653,12 @@ mod inner {
 
         /// Mutable access to both the info and nodes arrays simultaneously.
         #[inline(always)]
-        pub fn data_mut(&mut self) -> (&mut [SliceInfo<M::Measure>], &mut [Arc<Node<M>>]) {
+        pub fn data_mut(
+            &mut self,
+        ) -> (
+            &mut [SliceInfo<M::Measure>],
+            &mut [Arc<Node<M, LEAF_CAP, BRANCH_CAP>>],
+        ) {
             // SAFETY: MaybeUninit<T> is layout compatible with T, and
             // the info from 0..len are guaranteed to be initialized
             (
@@ -646,8 +671,8 @@ mod inner {
         ///
         /// Increases length by one. Panics if already full.
         #[inline(always)]
-        pub fn push(&mut self, item: (SliceInfo<M::Measure>, Arc<Node<M>>)) {
-            assert!(self.len() < max_children::<M, M::Measure>());
+        pub fn push(&mut self, item: (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>)) {
+            assert!(self.len() < BRANCH_CAP);
             self.info[self.len()] = MaybeUninit::new(item.0);
             self.nodes[self.len as usize] = MaybeUninit::new(item.1);
             // We have just initialized both info and node and 0..=len, so we can increase
@@ -659,7 +684,7 @@ mod inner {
         ///
         /// Decreases length by one. Panics if already empty.
         #[inline(always)]
-        pub fn pop(&mut self) -> (SliceInfo<M::Measure>, Arc<Node<M>>) {
+        pub fn pop(&mut self) -> (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>) {
             assert!(self.len() > 0);
             self.len -= 1;
             // SAFETY: before this, len was long enough to guarantee that both must be init
@@ -675,9 +700,13 @@ mod inner {
         /// Increases length by one. Panics if already full. Preserves ordering
         /// of the other items.
         #[inline(always)]
-        pub fn insert(&mut self, index: usize, item: (SliceInfo<M::Measure>, Arc<Node<M>>)) {
+        pub fn insert(
+            &mut self,
+            index: usize,
+            item: (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>),
+        ) {
             assert!(index <= self.len());
-            assert!(self.len() < max_children::<M, M::Measure>());
+            assert!(self.len() < BRANCH_CAP);
 
             let len = self.len();
             // This unsafe code simply shifts the elements of the arrays over
@@ -703,7 +732,10 @@ mod inner {
         ///
         /// Decreases length by one. Preserves ordering of the other items.
         #[inline(always)]
-        pub fn remove(&mut self, index: usize) -> (SliceInfo<M::Measure>, Arc<Node<M>>) {
+        pub fn remove(
+            &mut self,
+            index: usize,
+        ) -> (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>) {
             assert!(self.len() > 0);
             assert!(index < self.len());
 
@@ -732,11 +764,10 @@ mod inner {
         }
     }
 
-    impl<M> Drop for BranchChildrenInternal<M>
+    impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> Drop
+        for BranchChildrenInternal<M, LEAF_CAP, BRANCH_CAP>
     where
         M: Measurable,
-        [(); max_len::<M, M::Measure>()]: Sized,
-        [(); max_children::<M, M::Measure>()]: Sized,
     {
         fn drop(&mut self) {
             // The `.nodes` array contains `MaybeUninit` wrappers, which need
@@ -748,11 +779,10 @@ mod inner {
         }
     }
 
-    impl<M> Clone for BranchChildrenInternal<M>
+    impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> Clone
+        for BranchChildrenInternal<M, LEAF_CAP, BRANCH_CAP>
     where
         M: Measurable,
-        [(); max_len::<M, M::Measure>()]: Sized,
-        [(); max_children::<M, M::Measure>()]: Sized,
     {
         fn clone(&self) -> Self {
             // Create an empty NodeChildrenInternal first, then fill it
@@ -812,19 +842,19 @@ mod tests {
 
     use super::*;
     use crate::{
-        tree::{LeafSlice, Node, SliceInfo},
         Width,
+        tree::{LeafSlice, Node, SliceInfo},
     };
 
     fn make_leaf(slice: &[Width]) -> Arc<Node<Width>> {
         let leaf_slice = LeafSlice::from_slice(slice);
         let info = SliceInfo::<usize>::from_slice(&leaf_slice);
-        Arc::new(Node::Leaf(leaf_slice, info))
+        Arc::new(Node::<Width>::Leaf(leaf_slice, info))
     }
 
     #[test]
     fn search_width_01() {
-        let mut children = BranchChildren::new();
+        let mut children = BranchChildren::<Width>::new();
         children.push((
             SliceInfo::<usize>::new::<Width>(),
             make_leaf(&[Width(1), Width(2), Width(4)]),
@@ -866,7 +896,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn search_width_02() {
-        let mut children = BranchChildren::new();
+        let mut children = BranchChildren::<Width>::new();
         children.push((
             SliceInfo::<usize>::new::<Width>(),
             make_leaf(&[Width(1), Width(2), Width(4)]),
@@ -889,7 +919,7 @@ mod tests {
 
     #[test]
     fn search_width_range_01() {
-        let mut children = BranchChildren::new();
+        let mut children = BranchChildren::<Width>::new();
         children.push((
             SliceInfo::<usize>::new::<Width>(),
             make_leaf(&[Width(1), Width(2), Width(4)]),
@@ -956,7 +986,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn search_index_range_02() {
-        let mut children = BranchChildren::new();
+        let mut children = BranchChildren::<Width>::new();
         children.push((
             SliceInfo::<usize>::new::<Width>(),
             make_leaf(&[Width(1), Width(2), Width(4)]),

@@ -1,6 +1,7 @@
 use std::{cmp::Ordering, iter::FromIterator, ops::RangeBounds, sync::Arc};
 
 use crate::{
+    DEFAULT_BRANCH_CAP, DEFAULT_LEAF_CAP, Error, FallibleOrd, Measurable, MeasureRange, Result,
     end_bound_to_num,
     iter::{Chunks, Iter},
     measures_from_range,
@@ -8,14 +9,13 @@ use crate::{
     slice::RopeSlice,
     slice_utils::{end_measure_to_index, index_to_measure, start_measure_to_index},
     start_bound_to_num,
-    tree::{max_children, max_len, min_len, BranchChildren, Node, SliceInfo},
-    Error, FallibleOrd, Measurable, MeasureRange, Result,
+    tree::{BranchChildren, Node, SliceInfo, assert_valid_capacities, min_len},
 };
 
 /// A rope of elements that are [`Measurable`].
 ///
-/// The time complexity of nearly all edit and query operations on [`Rope<M>`]
-/// are worst-case `O(log N)` in the length of the rope. [`Rope<M>`] is designed
+/// The time complexity of nearly all edit and query operations on [`Rope<M, LEAF_CAP, BRANCH_CAP>`]
+/// are worst-case `O(log N)` in the length of the rope. [`Rope<M, LEAF_CAP, BRANCH_CAP>`] is designed
 /// to work efficiently even for huge (in the gigabytes) arrays of
 /// [`M`][Measurable].
 ///
@@ -24,13 +24,13 @@ use crate::{
 ///
 /// # Editing Operations
 ///
-/// The primary editing operations on [`Rope<M>`] are insertion and removal of
+/// The primary editing operations on [`Rope<M, LEAF_CAP, BRANCH_CAP>`] are insertion and removal of
 /// slices or individual elements.
 /// For example:
 ///
 /// ```
 /// # use any_rope::{Rope, Width};
-/// let mut rope = Rope::from_slice(&[
+/// let mut rope = Rope::<Width>::from_slice(&[
 ///     Width(1),
 ///     Width(2),
 ///     Width(3),
@@ -50,14 +50,14 @@ use crate::{
 ///
 /// # Query Operations
 ///
-/// [`Rope<M>`] gives you the ability to query an element at any given index or
+/// [`Rope<M, LEAF_CAP, BRANCH_CAP>`] gives you the ability to query an element at any given index or
 /// measure, and the convertion between the two. You can either convert an index
 /// to a measure, or convert the measure at the start or end of an element to an
 /// index. For example:
 ///
 /// ```rust
 /// # use any_rope::{Rope, Width};
-/// let rope = Rope::from_slice(&[
+/// let rope = Rope::<Width>::from_slice(&[
 ///     Width(0),
 ///     Width(0),
 ///     Width(1),
@@ -81,13 +81,13 @@ use crate::{
 ///
 /// # Slicing
 ///
-/// You can take immutable slices of a [`Rope<M>`] using
+/// You can take immutable slices of a [`Rope<M, LEAF_CAP, BRANCH_CAP>`] using
 /// [`measure_slice()`][Rope::measure_slice]
 /// or [`index_slice()`][Rope::index_slice]:
 ///
 /// ```rust
 /// # use any_rope::{Rope, Width};
-/// let mut rope = Rope::from_slice(&[
+/// let mut rope = Rope::<Width>::from_slice(&[
 ///     Width(1),
 ///     Width(2),
 ///     Width(3),
@@ -104,55 +104,55 @@ use crate::{
 ///
 /// # Cloning
 ///
-/// Cloning [`Rope<M>`]s is extremely cheap, running in `O(1)` time and taking a
+/// Cloning [`Rope<M, LEAF_CAP, BRANCH_CAP>`]s is extremely cheap, running in `O(1)` time and taking a
 /// small constant amount of memory for the new clone, regardless of slice size.
-/// This is accomplished by data sharing between [`Rope<M>`] clones. The memory
+/// This is accomplished by data sharing between [`Rope<M, LEAF_CAP, BRANCH_CAP>`] clones. The memory
 /// used by clones only grows incrementally as the their contents diverge due
 /// to edits. All of this is thread safe, so clones can be sent freely
 /// between threads.
 ///
 /// The primary intended use-case for this feature is to allow asynchronous
-/// processing of [`Rope<M>`]s.
+/// processing of [`Rope<M, LEAF_CAP, BRANCH_CAP>`]s.
 #[derive(Clone)]
-pub struct Rope<M>
-where
+pub struct Rope<
+    M,
+    const LEAF_CAP: usize = DEFAULT_LEAF_CAP,
+    const BRANCH_CAP: usize = DEFAULT_BRANCH_CAP,
+> where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
-    pub(crate) root: Arc<Node<M>>,
+    pub(crate) root: Arc<Node<M, LEAF_CAP, BRANCH_CAP>>,
 }
 
-impl<M> Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     //-----------------------------------------------------------------------
     // Constructors
 
-    /// Creates an empty [`Rope<M>`].
+    /// Creates an empty [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
     #[inline]
     pub fn new() -> Self {
+        assert_valid_capacities::<LEAF_CAP, BRANCH_CAP>();
         Rope {
             root: Arc::new(Node::new()),
         }
     }
 
-    /// Creates a [`Rope<M>`] from an [`M`][Measurable] slice.
+    /// Creates a [`Rope<M, LEAF_CAP, BRANCH_CAP>`] from an [`M`][Measurable] slice.
     ///
     /// Runs in O(N) time.
     #[inline]
     #[allow(clippy::should_implement_trait)]
     pub fn from_slice(slice: &[M]) -> Self {
-        RopeBuilder::new().build_at_once(slice)
+        RopeBuilder::<M, LEAF_CAP, BRANCH_CAP>::new().build_at_once(slice)
     }
 
     //-----------------------------------------------------------------------
     // Informational methods
 
-    /// Total number of elements in [`Rope<M>`].
+    /// Total number of elements in [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// Runs in O(1) time.
     #[inline]
@@ -160,7 +160,7 @@ where
         self.root.len()
     }
 
-    /// Returns `true` if the [`Rope<M>`] is empty.
+    /// Returns `true` if the [`Rope<M, LEAF_CAP, BRANCH_CAP>`] is empty.
     ///
     /// Runs in O(1) time.
     #[inline]
@@ -168,7 +168,7 @@ where
         self.root.len() == 0
     }
 
-    /// Sum of all measures of in [`Rope<M>`].
+    /// Sum of all measures of in [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// Runs in O(1) time.
     #[inline]
@@ -179,7 +179,7 @@ where
     //-----------------------------------------------------------------------
     // Memory management methods
 
-    /// Total size of the [`Rope<M>`]'s buffer space.
+    /// Total size of the [`Rope<M, LEAF_CAP, BRANCH_CAP>`]'s buffer space.
     ///
     /// This includes unoccupied buffer space. You can calculate
     /// the unoccupied space with `Rope::capacity() - Rope::len()`. In general,
@@ -190,25 +190,25 @@ where
     pub fn capacity(&self) -> usize {
         let mut count = 0;
         for chunk in self.chunks() {
-            count += chunk.len().max(max_len::<M, M::Measure>());
+            count += chunk.len().max(LEAF_CAP);
         }
         count
     }
 
-    /// Shrinks the [`Rope<M>`]'s capacity to the minimum possible.
+    /// Shrinks the [`Rope<M, LEAF_CAP, BRANCH_CAP>`]'s capacity to the minimum possible.
     ///
     /// This will rarely result in `Rope::capacity() == Rope::len()`.
-    /// [`Rope<M>`] stores [`M`][Measurable]s in a sequence of
+    /// [`Rope<M, LEAF_CAP, BRANCH_CAP>`] stores [`M`][Measurable]s in a sequence of
     /// fixed-capacity chunks, so an exact fit only happens for lists of a
     /// lenght that is a multiple of that capacity.
     ///
     /// After calling this, the difference between `capacity()` and
     /// `len()` is typically under 1000 for each 1000000 [`M`][Measurable] in
-    /// the [`Rope<M>`].
+    /// the [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
     ///
-    /// **NOTE:** calling this on a [`Rope<M>`] clone causes it to stop sharing
+    /// **NOTE:** calling this on a [`Rope<M, LEAF_CAP, BRANCH_CAP>`] clone causes it to stop sharing
     /// all data with its other clones. In such cases you will very likely
-    /// be _increasing_ total memory usage despite shrinking the [`Rope<M>`]'s
+    /// be _increasing_ total memory usage despite shrinking the [`Rope<M, LEAF_CAP, BRANCH_CAP>`]'s
     /// capacity.
     ///
     /// Runs in O(N) time, and uses O(log N) additional space during
@@ -216,7 +216,7 @@ where
     #[inline]
     pub fn shrink_to_fit(&mut self) {
         let mut node_stack = Vec::new();
-        let mut builder = RopeBuilder::new();
+        let mut builder = RopeBuilder::<M, LEAF_CAP, BRANCH_CAP>::new();
 
         node_stack.push(self.root.clone());
         *self = Rope::new();
@@ -246,7 +246,7 @@ where
 
     /// Inserts [`slice`][Measurable] at `measure`.
     ///
-    /// Runs in O(L + log N) time, where N is the length of the [`Rope<M>`] and
+    /// Runs in O(L + log N) time, where N is the length of the [`Rope<M, LEAF_CAP, BRANCH_CAP>`] and
     /// L is the length of [`slice`][Measurable].
     ///
     /// # Panics
@@ -305,7 +305,7 @@ where
                 let index = end_measure_to_index(leaf_slice, index, cmp);
 
                 // No node splitting
-                if (leaf_slice.len() + slice.len()) <= max_len::<M, M::Measure>() {
+                if (leaf_slice.len() + slice.len()) <= LEAF_CAP {
                     // Calculate new info without doing a full re-scan of cur_slice.
                     let new_info = cur_info + SliceInfo::<M::Measure>::from_slice(slice);
                     leaf_slice.insert_slice(index, slice);
@@ -346,7 +346,7 @@ where
     ///
     /// Uses range syntax, e.g. `2..7`, `2..`, etc.
     ///
-    /// Runs in O(M + log N) time, where N is the length of the [`Rope<M>`] and
+    /// Runs in O(M + log N) time, where N is the length of the [`Rope<M, LEAF_CAP, BRANCH_CAP>`] and
     /// M is the length of the range being removed.
     ///
     /// The first removed [`M`][Measurable] will be the first with a end measure
@@ -385,7 +385,7 @@ where
     ///     Width(2),
     ///     Width(1),
     /// ];
-    /// let mut rope = Rope::from_slice(&array);
+    /// let mut rope = Rope::<Width>::from_slice(&array);
     ///
     /// // Removing in the middle of `Width(3)`.
     /// rope.remove_inclusive(5.., usize::cmp);
@@ -403,7 +403,7 @@ where
     ///     Width(2),
     ///     Width(1),
     /// ];
-    /// let mut rope = Rope::from_slice(&array);
+    /// let mut rope = Rope::<Width>::from_slice(&array);
     ///
     /// // End bound coincides with a 0 measure list.
     /// rope.remove_inclusive(1..6, usize::cmp);
@@ -421,7 +421,7 @@ where
     ///     Width(2),
     ///     Width(1),
     /// ];
-    /// let mut rope = Rope::from_slice(&array);
+    /// let mut rope = Rope::<Width>::from_slice(&array);
     ///
     /// // Empty range at the start of a 0 measure list.
     /// rope.remove_inclusive(6..6, usize::cmp);
@@ -465,7 +465,7 @@ where
     ///     Width(2),
     ///     Width(1),
     /// ];
-    /// let mut rope = Rope::from_slice(&array);
+    /// let mut rope = Rope::<Width>::from_slice(&array);
     ///
     /// // End bound coincides with a 0 measure list, which does not get removed.
     /// rope.remove_exclusive(1..6, usize::cmp);
@@ -486,7 +486,7 @@ where
     ///     Width(2),
     ///     Width(1),
     /// ];
-    /// let mut rope = Rope::from_slice(&array);
+    /// let mut rope = Rope::<Width>::from_slice(&array);
     ///
     /// // Empty range at the start of a 0 measure list.
     /// rope.remove_exclusive(6..6, usize::cmp);
@@ -505,7 +505,7 @@ where
     ///     Width(2),
     ///     Width(1),
     /// ];
-    /// let mut rope = Rope::from_slice(&array);
+    /// let mut rope = Rope::<Width>::from_slice(&array);
     ///
     /// // Removing in the middle of `Width(3)`.
     /// rope.remove_exclusive(5..6, usize::cmp);
@@ -527,7 +527,7 @@ where
         self.try_remove_exclusive(range, cmp).unwrap()
     }
 
-    /// Splits the [`Rope<M>`] at `measure`, returning the right part of the
+    /// Splits the [`Rope<M, LEAF_CAP, BRANCH_CAP>`] at `measure`, returning the right part of the
     /// split.
     ///
     /// Runs in O(log N) time.
@@ -545,8 +545,8 @@ where
         self.try_split_off(measure, cmp).unwrap()
     }
 
-    /// Appends a [`Rope<M>`] to the end of this one, consuming the other
-    /// [`Rope<M>`].
+    /// Appends a [`Rope<M, LEAF_CAP, BRANCH_CAP>`] to the end of this one, consuming the other
+    /// [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// Runs in O(log N) time.
     #[inline]
@@ -582,8 +582,8 @@ where
 
             // Fix up any mess left behind.
             let root = Arc::make_mut(&mut self.root);
-            if (left_info.len as usize) < min_len::<M, M::Measure>()
-                || (right_info.len as usize) < min_len::<M, M::Measure>()
+            if (left_info.len as usize) < min_len(LEAF_CAP)
+                || (right_info.len as usize) < min_len(LEAF_CAP)
             {
                 root.fix_tree_seam(left_info.measure, &M::Measure::fallible_cmp);
             }
@@ -758,7 +758,7 @@ where
     //-----------------------------------------------------------------------
     // Slicing
 
-    /// Gets an immutable slice of the [`Rope<M>`], using a measure range.
+    /// Gets an immutable slice of the [`Rope<M, LEAF_CAP, BRANCH_CAP>`], using a measure range.
     ///
     /// Uses range syntax, e.g. `2..7`, `2..`, etc.
     ///
@@ -766,7 +766,7 @@ where
     ///
     /// ```rust
     /// # use any_rope::{Rope, Width};
-    /// let mut rope = Rope::from_slice(&[
+    /// let mut rope = Rope::<Width>::from_slice(&[
     ///     Width(1),
     ///     Width(2),
     ///     Width(3),
@@ -791,11 +791,11 @@ where
         &self,
         measure_range: impl MeasureRange<M>,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> RopeSlice<M> {
+    ) -> RopeSlice<M, LEAF_CAP, BRANCH_CAP> {
         self.get_measure_slice(measure_range, cmp).unwrap()
     }
 
-    /// Gets and immutable slice of the [`Rope<M>`], using an index range.
+    /// Gets and immutable slice of the [`Rope<M, LEAF_CAP, BRANCH_CAP>`], using an index range.
     ///
     /// Uses range syntax, e.g. `2..7`, `2..`, etc.
     ///
@@ -807,7 +807,10 @@ where
     /// - The start of the range is greater than the end.
     /// - The end is out of bounds (i.e. `end > Rope::len()`).
     #[inline]
-    pub fn index_slice(&self, index_range: impl RangeBounds<usize>) -> RopeSlice<M> {
+    pub fn index_slice(
+        &self,
+        index_range: impl RangeBounds<usize>,
+    ) -> RopeSlice<M, LEAF_CAP, BRANCH_CAP> {
         match self.get_index_slice_impl(index_range) {
             Ok(s) => return s,
             Err(e) => panic!("index_slice(): {}", e),
@@ -817,18 +820,18 @@ where
     //-----------------------------------------------------------------------
     // Iterator methods
 
-    /// Creates an iterator over the [`Rope<M>`].
+    /// Creates an iterator over the [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// This iterator will return values of type [Option<(usize, M)>], where the
     /// `usize` is the measure sum where the given [`M`][Measurable] starts.
     ///
     /// Runs in O(log N) time.
     #[inline]
-    pub fn iter(&self) -> Iter<M> {
-        Iter::new(&self.root)
+    pub fn iter(&self) -> Iter<M, LEAF_CAP, BRANCH_CAP> {
+        Iter::<M, LEAF_CAP, BRANCH_CAP>::new(&self.root)
     }
 
-    /// Creates an iterator over the  [`Rope<M>`], starting at `measure`.
+    /// Creates an iterator over the  [`Rope<M, LEAF_CAP, BRANCH_CAP>`], starting at `measure`.
     ///
     /// This iterator will return values of type [`Option<(usize, M)>`], where
     /// the `usize` is the measure where the given [`M`][Measurable] starts.
@@ -837,7 +840,7 @@ where
     /// `measure` given to the function.
     ///
     /// If `measure == Rope::measure()` then an iterator at the end of the
-    /// [`Rope<M>`] is created (i.e. [`next()`][crate::iter::Iter::next] will
+    /// [`Rope<M, LEAF_CAP, BRANCH_CAP>`] is created (i.e. [`next()`][crate::iter::Iter::<M, LEAF_CAP, BRANCH_CAP>::next] will
     /// return [`None`]).
     ///
     /// Runs in O(log N) time.
@@ -851,7 +854,7 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Iter<M> {
+    ) -> Iter<M, LEAF_CAP, BRANCH_CAP> {
         if let Some(out) = self.get_iter_at_measure(measure, cmp) {
             out
         } else {
@@ -863,22 +866,22 @@ where
         }
     }
 
-    /// Creates an iterator over the chunks of the [`Rope<M>`].
+    /// Creates an iterator over the chunks of the [`Rope<M, LEAF_CAP, BRANCH_CAP>`].
     ///
     /// Runs in O(log N) time.
     #[inline]
-    pub fn chunks(&self) -> Chunks<M> {
-        Chunks::new(&self.root)
+    pub fn chunks(&self) -> Chunks<M, LEAF_CAP, BRANCH_CAP> {
+        Chunks::<M, LEAF_CAP, BRANCH_CAP>::new(&self.root)
     }
 
-    /// Creates an iterator over the chunks of the [`Rope<M>`], with the
+    /// Creates an iterator over the chunks of the [`Rope<M, LEAF_CAP, BRANCH_CAP>`], with the
     /// iterator starting at the chunk containing the `index`.
     ///
     /// Also returns the index and measure of the beginning of the first
     /// chunk to be yielded.
     ///
-    /// If `index == Rope::len()` an iterator at the end of the [`Rope<M>`]
-    /// (yielding [`None`] on a call to [`next()`][crate::iter::Iter::next]) is
+    /// If `index == Rope::len()` an iterator at the end of the [`Rope<M, LEAF_CAP, BRANCH_CAP>`]
+    /// (yielding [`None`] on a call to [`next()`][crate::iter::Iter::<M, LEAF_CAP, BRANCH_CAP>::next]) is
     /// created.
     ///
     /// The return value is organized as `(iterator, chunk_index,
@@ -890,7 +893,10 @@ where
     ///
     /// Panics if the `index` is out of bounds (i.e. `index > Rope::len()`).
     #[inline]
-    pub fn chunks_at_index(&self, index: usize) -> (Chunks<M>, usize, M::Measure) {
+    pub fn chunks_at_index(
+        &self,
+        index: usize,
+    ) -> (Chunks<M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure) {
         if let Some(out) = self.get_chunks_at_index(index) {
             out
         } else {
@@ -902,15 +908,15 @@ where
         }
     }
 
-    /// Creates an iterator over the chunks of the [`Rope<M>`], with the
+    /// Creates an iterator over the chunks of the [`Rope<M, LEAF_CAP, BRANCH_CAP>`], with the
     /// iterator starting at the chunk containing the `measure`.
     ///
     /// Also returns the index and measure of the beginning of the first
     /// chunk to be yielded.
     ///
     /// If `measure == Rope::measure()` an iterator at the end of the
-    /// [`Rope<M>`] (yielding [`None`] on a call to
-    /// [`next()`][crate::iter::Iter::next]) is created.
+    /// [`Rope<M, LEAF_CAP, BRANCH_CAP>`] (yielding [`None`] on a call to
+    /// [`next()`][crate::iter::Iter::<M, LEAF_CAP, BRANCH_CAP>::next]) is created.
     ///
     /// The return value is organized as `(iterator, chunk_index,
     /// chunk_measure)`.
@@ -926,7 +932,7 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> (Chunks<M>, usize, M::Measure) {
+    ) -> (Chunks<M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure) {
         if let Some(out) = self.get_chunks_at_measure(measure, &cmp) {
             out
         } else {
@@ -1007,13 +1013,11 @@ where
 /// # Non-Panicking
 ///
 /// The methods in this impl block provide non-panicking versions of
-/// [`Rope<M>`]'s panicking methods. They return either `Option::None` or
+/// [`Rope<M, LEAF_CAP, BRANCH_CAP>`]'s panicking methods. They return either `Option::None` or
 /// `Result::Err()` when their panicking counterparts would have panicked.
-impl<M> Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     /// Non-panicking version of [`insert()`][Rope::insert].
     #[inline]
@@ -1040,7 +1044,7 @@ where
             // The boundary for what constitutes "very large" slice was arrived at
             // experimentally, by testing at what point Rope build + splice becomes
             // faster than split + repeated insert.
-            if slice.len() > max_len::<M, M::Measure>() * 6 {
+            if slice.len() > LEAF_CAP * 6 {
                 // Case #1: very large slice, build rope and splice it in.
                 let rope = Rope::from_slice(slice);
                 let right = self.split_off(measure, &cmp);
@@ -1053,7 +1057,7 @@ where
                     // We do this from the end instead of the front so that
                     // the repeated insertions can keep re-using the same
                     // insertion point.
-                    let split_index = slice.len().saturating_sub(max_len::<M, M::Measure>() - 4);
+                    let split_index = slice.len().saturating_sub(LEAF_CAP - 4);
                     let ins_slice = &slice[split_index..];
                     slice = &slice[..split_index];
 
@@ -1240,7 +1244,10 @@ where
             let (chunk, _, chunk_measure) = self.chunk_at_measure(measure, &cmp);
             let index = start_measure_to_index(chunk, measure - chunk_measure, cmp);
             let measure = index_to_measure(chunk, index);
-            Some((measure + chunk_measure, chunk[index.min(chunk.len() - 1)].clone()))
+            Some((
+                measure + chunk_measure,
+                chunk[index.min(chunk.len() - 1)].clone(),
+            ))
         } else {
             None
         }
@@ -1280,7 +1287,7 @@ where
         &self,
         range: impl MeasureRange<M>,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Result<RopeSlice<M>, M> {
+    ) -> Result<RopeSlice<M, LEAF_CAP, BRANCH_CAP>, M> {
         let (start, end) = measures_from_range(&range, self.measure())?;
 
         // Bounds check
@@ -1289,14 +1296,17 @@ where
 
     /// Non-panicking version of [`index_slice()`][Rope::index_slice].
     #[inline]
-    pub fn get_index_slice(&self, index_range: impl RangeBounds<usize>) -> Option<RopeSlice<M>> {
+    pub fn get_index_slice(
+        &self,
+        index_range: impl RangeBounds<usize>,
+    ) -> Option<RopeSlice<M, LEAF_CAP, BRANCH_CAP>> {
         self.get_index_slice_impl(index_range).ok()
     }
 
     pub(crate) fn get_index_slice_impl(
         &self,
         index_range: impl RangeBounds<usize>,
-    ) -> Result<RopeSlice<M>, M> {
+    ) -> Result<RopeSlice<M, LEAF_CAP, BRANCH_CAP>, M> {
         let start_range = start_bound_to_num(index_range.start_bound());
         let end_range = end_bound_to_num(index_range.end_bound());
 
@@ -1344,10 +1354,10 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Option<Iter<M>> {
+    ) -> Option<Iter<M, LEAF_CAP, BRANCH_CAP>> {
         // Bounds check
         if cmp(&measure, &self.measure()).is_le() {
-            Some(Iter::new_with_range_at_measure(
+            Some(Iter::<M, LEAF_CAP, BRANCH_CAP>::new_with_range_at_measure(
                 &self.root,
                 measure,
                 (0, self.len()),
@@ -1361,10 +1371,13 @@ where
 
     /// Non-panicking version of [`chunks_at_index()`][Rope::chunks_at_index].
     #[inline]
-    pub fn get_chunks_at_index(&self, index: usize) -> Option<(Chunks<M>, usize, M::Measure)> {
+    pub fn get_chunks_at_index(
+        &self,
+        index: usize,
+    ) -> Option<(Chunks<M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure)> {
         // Bounds check
         if index <= self.len() {
-            Some(Chunks::new_with_range_at_index(
+            Some(Chunks::<M, LEAF_CAP, BRANCH_CAP>::new_with_range_at_index(
                 &self.root,
                 index,
                 (0, self.len()),
@@ -1382,16 +1395,18 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Option<(Chunks<M>, usize, M::Measure)> {
+    ) -> Option<(Chunks<M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure)> {
         // Bounds check
         if cmp(&measure, &self.measure()).is_le() {
-            Some(Chunks::new_with_range_at_measure(
-                &self.root,
-                measure,
-                (0, self.len()),
-                (M::Measure::default(), self.measure()),
-                cmp,
-            ))
+            Some(
+                Chunks::<M, LEAF_CAP, BRANCH_CAP>::new_with_range_at_measure(
+                    &self.root,
+                    measure,
+                    (0, self.len()),
+                    (M::Measure::default(), self.measure()),
+                    cmp,
+                ),
+            )
         } else {
             None
         }
@@ -1401,11 +1416,10 @@ where
 //==============================================================
 // Conversion impls
 
-impl<'a, M> From<&'a [M]> for Rope<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> From<&'a [M]>
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn from(slice: &'a [M]) -> Self {
@@ -1413,11 +1427,10 @@ where
     }
 }
 
-impl<'a, M> From<std::borrow::Cow<'a, [M]>> for Rope<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> From<std::borrow::Cow<'a, [M]>>
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn from(slice: std::borrow::Cow<'a, [M]>) -> Self {
@@ -1425,11 +1438,10 @@ where
     }
 }
 
-impl<M> From<Vec<M>> for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> From<Vec<M>>
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn from(slice: Vec<M>) -> Self {
@@ -1440,13 +1452,12 @@ where
 /// Will share data where possible.
 ///
 /// Runs in O(log N) time.
-impl<'a, M> From<RopeSlice<'a, M>> for Rope<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    From<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>> for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
-    fn from(s: RopeSlice<'a, M>) -> Self {
+    fn from(s: RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>) -> Self {
         use crate::slice::RSEnum;
         match s {
             RopeSlice(RSEnum::Full {
@@ -1490,56 +1501,52 @@ where
     }
 }
 
-impl<M> From<Rope<M>> for Vec<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> From<Rope<M, LEAF_CAP, BRANCH_CAP>>
+    for Vec<M>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn from(r: Rope<M>) -> Self {
+    fn from(r: Rope<M, LEAF_CAP, BRANCH_CAP>) -> Self {
         Vec::from(&r)
     }
 }
 
-impl<'a, M> From<&'a Rope<M>> for Vec<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> From<&'a Rope<M, LEAF_CAP, BRANCH_CAP>>
+    for Vec<M>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn from(r: &'a Rope<M>) -> Self {
+    fn from(r: &'a Rope<M, LEAF_CAP, BRANCH_CAP>) -> Self {
         let mut vec = Vec::with_capacity(r.len());
         vec.extend(r.chunks().flat_map(|chunk| chunk.iter()).cloned());
         vec
     }
 }
 
-impl<'a, M> From<Rope<M>> for std::borrow::Cow<'a, [M]>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> From<Rope<M, LEAF_CAP, BRANCH_CAP>>
+    for std::borrow::Cow<'a, [M]>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn from(r: Rope<M>) -> Self {
+    fn from(r: Rope<M, LEAF_CAP, BRANCH_CAP>) -> Self {
         std::borrow::Cow::Owned(Vec::from(r))
     }
 }
 
-/// Attempts to borrow the contents of the [`Rope<M>`], but will convert to an
+/// Attempts to borrow the contents of the [`Rope<M, LEAF_CAP, BRANCH_CAP>`], but will convert to an
 /// owned [`[M]`][Measurable] if the contents is not contiguous in memory.
 ///
 /// Runs in best case O(1), worst case O(N).
-impl<'a, M> From<&'a Rope<M>> for std::borrow::Cow<'a, [M]>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> From<&'a Rope<M, LEAF_CAP, BRANCH_CAP>>
+    for std::borrow::Cow<'a, [M]>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn from(r: &'a Rope<M>) -> Self {
+    fn from(r: &'a Rope<M, LEAF_CAP, BRANCH_CAP>) -> Self {
         if let Node::Leaf(ref slice, _) = *r.root {
             std::borrow::Cow::Borrowed(slice)
         } else {
@@ -1548,17 +1555,16 @@ where
     }
 }
 
-impl<'a, M> FromIterator<&'a [M]> for Rope<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> FromIterator<&'a [M]>
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = &'a [M]>,
     {
-        let mut builder = RopeBuilder::new();
+        let mut builder = RopeBuilder::<M, LEAF_CAP, BRANCH_CAP>::new();
         for chunk in iter {
             builder.append_slice(chunk);
         }
@@ -1566,17 +1572,16 @@ where
     }
 }
 
-impl<'a, M> FromIterator<std::borrow::Cow<'a, [M]>> for Rope<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> FromIterator<std::borrow::Cow<'a, [M]>>
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = std::borrow::Cow<'a, [M]>>,
     {
-        let mut builder = RopeBuilder::new();
+        let mut builder = RopeBuilder::<M, LEAF_CAP, BRANCH_CAP>::new();
         for chunk in iter {
             builder.append_slice(&chunk);
         }
@@ -1584,17 +1589,16 @@ where
     }
 }
 
-impl<M> FromIterator<Vec<M>> for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> FromIterator<Vec<M>>
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = Vec<M>>,
     {
-        let mut builder = RopeBuilder::new();
+        let mut builder = RopeBuilder::<M, LEAF_CAP, BRANCH_CAP>::new();
         for chunk in iter {
             builder.append_slice(&chunk);
         }
@@ -1605,22 +1609,20 @@ where
 //==============================================================
 // Other impls
 
-impl<M> std::fmt::Debug for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::fmt::Debug
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + std::fmt::Debug,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_list().entries(self.chunks()).finish()
     }
 }
 
-impl<M> std::fmt::Display for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::fmt::Display
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + std::fmt::Display,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -1638,11 +1640,10 @@ where
     }
 }
 
-impl<M> std::default::Default for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::default::Default
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn default() -> Self {
@@ -1650,32 +1651,29 @@ where
     }
 }
 
-impl<M> std::cmp::Eq for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::cmp::Eq
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + Eq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
 }
 
-impl<M> std::cmp::PartialEq<Rope<M>> for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<Rope<M, LEAF_CAP, BRANCH_CAP>> for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &Rope<M>) -> bool {
+    fn eq(&self, other: &Rope<M, LEAF_CAP, BRANCH_CAP>) -> bool {
         self.measure_slice(.., M::Measure::fallible_cmp)
             == other.measure_slice(.., M::Measure::fallible_cmp)
     }
 }
 
-impl<'a, M> std::cmp::PartialEq<&'a [M]> for Rope<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::cmp::PartialEq<&'a [M]>
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn eq(&self, other: &&'a [M]) -> bool {
@@ -1683,23 +1681,21 @@ where
     }
 }
 
-impl<'a, M> std::cmp::PartialEq<Rope<M>> for &'a [M]
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<Rope<M, LEAF_CAP, BRANCH_CAP>> for &'a [M]
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &Rope<M>) -> bool {
+    fn eq(&self, other: &Rope<M, LEAF_CAP, BRANCH_CAP>) -> bool {
         *self == other.measure_slice(.., M::Measure::fallible_cmp)
     }
 }
 
-impl<M> std::cmp::PartialEq<[M]> for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::cmp::PartialEq<[M]>
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn eq(&self, other: &[M]) -> bool {
@@ -1707,23 +1703,21 @@ where
     }
 }
 
-impl<M> std::cmp::PartialEq<Rope<M>> for [M]
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<Rope<M, LEAF_CAP, BRANCH_CAP>> for [M]
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &Rope<M>) -> bool {
+    fn eq(&self, other: &Rope<M, LEAF_CAP, BRANCH_CAP>) -> bool {
         self == other.measure_slice(.., M::Measure::fallible_cmp)
     }
 }
 
-impl<M> std::cmp::PartialEq<Vec<M>> for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::cmp::PartialEq<Vec<M>>
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn eq(&self, other: &Vec<M>) -> bool {
@@ -1731,23 +1725,21 @@ where
     }
 }
 
-impl<M> std::cmp::PartialEq<Rope<M>> for Vec<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<Rope<M, LEAF_CAP, BRANCH_CAP>> for Vec<M>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &Rope<M>) -> bool {
+    fn eq(&self, other: &Rope<M, LEAF_CAP, BRANCH_CAP>) -> bool {
         self.as_slice() == other.measure_slice(.., M::Measure::fallible_cmp)
     }
 }
 
-impl<'a, M> std::cmp::PartialEq<std::borrow::Cow<'a, [M]>> for Rope<M>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<std::borrow::Cow<'a, [M]>> for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
     fn eq(&self, other: &std::borrow::Cow<'a, [M]>) -> bool {
@@ -1755,39 +1747,36 @@ where
     }
 }
 
-impl<'a, M> std::cmp::PartialEq<Rope<M>> for std::borrow::Cow<'a, [M]>
+impl<'a, M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialEq<Rope<M, LEAF_CAP, BRANCH_CAP>> for std::borrow::Cow<'a, [M]>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn eq(&self, other: &Rope<M>) -> bool {
+    fn eq(&self, other: &Rope<M, LEAF_CAP, BRANCH_CAP>) -> bool {
         **self == other.measure_slice(.., M::Measure::fallible_cmp)
     }
 }
 
-impl<M> std::cmp::Ord for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> std::cmp::Ord
+    for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + Ord,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn cmp(&self, other: &Rope<M>) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Rope<M, LEAF_CAP, BRANCH_CAP>) -> std::cmp::Ordering {
         self.measure_slice(.., M::Measure::fallible_cmp)
             .cmp(&other.measure_slice(.., M::Measure::fallible_cmp))
     }
 }
 
-impl<M> std::cmp::PartialOrd<Rope<M>> for Rope<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
+    std::cmp::PartialOrd<Rope<M, LEAF_CAP, BRANCH_CAP>> for Rope<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable + PartialOrd + Ord,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     #[inline]
-    fn partial_cmp(&self, other: &Rope<M>) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Rope<M, LEAF_CAP, BRANCH_CAP>) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -1823,7 +1812,7 @@ mod tests {
 
     #[test]
     fn new_01() {
-        let rope: Rope<Width> = Rope::new();
+        let rope: Rope<Width, 9, 5> = Rope::<Width, 9, 5>::new();
         assert_eq!(rope, [].as_slice());
 
         rope.assert_integrity();
@@ -1832,7 +1821,7 @@ mod tests {
 
     #[test]
     fn from_slice() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         assert_eq!(rope, pseudo_random());
 
         rope.assert_integrity();
@@ -1841,31 +1830,31 @@ mod tests {
 
     #[test]
     fn len_01() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         assert_eq!(rope.len(), 70);
     }
 
     #[test]
     fn measure_02() {
-        let rope: Rope<Width> = Rope::from_slice(&[]);
+        let rope: Rope<Width, 9, 5> = Rope::<Width, 9, 5>::from_slice(&[]);
         assert_eq!(rope.len(), 0);
     }
 
     #[test]
     fn len_from_measures_01() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         assert_eq!(rope.measure(), 135);
     }
 
     #[test]
     fn len_from_measures_02() {
-        let rope: Rope<Width> = Rope::from_slice(&[]);
+        let rope: Rope<Width, 9, 5> = Rope::<Width, 9, 5>::from_slice(&[]);
         assert_eq!(rope.measure(), 0);
     }
 
     #[test]
     fn insert_01() {
-        let mut rope = Rope::from_slice(SHORT_LOREM);
+        let mut rope = Rope::<Width, 9, 5>::from_slice(SHORT_LOREM);
         rope.insert_slice(3, &[Width(1), Width(2), Width(3)], usize::cmp);
 
         assert_eq!(
@@ -1889,7 +1878,7 @@ mod tests {
 
     #[test]
     fn insert_02() {
-        let mut rope = Rope::from_slice(SHORT_LOREM);
+        let mut rope = Rope::<Width, 9, 5>::from_slice(SHORT_LOREM);
         rope.insert_slice(0, &[Width(1), Width(2), Width(3)], usize::cmp);
 
         assert_eq!(
@@ -1913,7 +1902,7 @@ mod tests {
 
     #[test]
     fn insert_03() {
-        let mut rope = Rope::from_slice(SHORT_LOREM);
+        let mut rope = Rope::<Width, 9, 5>::from_slice(SHORT_LOREM);
         rope.insert_slice(6, &[Width(1), Width(2), Width(3)], usize::cmp);
 
         assert_eq!(
@@ -1937,7 +1926,7 @@ mod tests {
 
     #[test]
     fn insert_04() {
-        let mut rope = Rope::new();
+        let mut rope = Rope::<Width, 9, 5>::new();
         rope.insert_slice(0, &[Width(1), Width(2)], usize::cmp);
         rope.insert_slice(2, &[Width(5)], usize::cmp);
         rope.insert_slice(3, &[Width(0)], usize::cmp);
@@ -1957,7 +1946,7 @@ mod tests {
 
     #[test]
     fn insert_05() {
-        let mut rope = Rope::new();
+        let mut rope = Rope::<Width, 9, 5>::new();
         rope.insert_slice(0, &[Width(15), Width(20)], usize::cmp);
         rope.insert_slice(7, &[Width(0), Width(0)], usize::cmp);
         assert_eq!(rope, [Width(15), Width(0), Width(0), Width(20)].as_slice());
@@ -1968,7 +1957,7 @@ mod tests {
 
     #[test]
     fn insert_06() {
-        let mut rope = Rope::new();
+        let mut rope = Rope::<Width, 9, 5>::new();
         rope.insert(0, Width(15), usize::cmp);
         rope.insert(1, Width(20), usize::cmp);
         rope.insert(2, Width(10), usize::cmp);
@@ -2002,7 +1991,7 @@ mod tests {
             Width(2),
             Width(7),
         ];
-        let mut rope = Rope::from_slice(slice);
+        let mut rope = Rope::<Width, 9, 5>::from_slice(slice);
 
         rope.remove_inclusive(0..11, usize::cmp);
         rope.remove_inclusive(24..31, usize::cmp);
@@ -2016,7 +2005,7 @@ mod tests {
     #[test]
     fn remove_02() {
         let slice = &[Width(1); 15];
-        let mut rope = Rope::from_slice(slice);
+        let mut rope = Rope::<Width, 9, 5>::from_slice(slice);
 
         // assert_invariants() below.
         rope.remove_inclusive(3..6, usize::cmp);
@@ -2028,7 +2017,7 @@ mod tests {
 
     #[test]
     fn remove_03() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         // Make sure removing an empty range, on a non 0 measure element, does nothing.
         rope.remove_inclusive(45..45, usize::cmp);
@@ -2040,7 +2029,7 @@ mod tests {
 
     #[test]
     fn remove_04() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         // Make sure removing everything works.
         rope.remove_inclusive(0..135, usize::cmp);
@@ -2052,7 +2041,7 @@ mod tests {
 
     #[test]
     fn remove_05() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         // Make sure removing a large range works.
         rope.remove_inclusive(3..135, usize::cmp);
@@ -2068,7 +2057,7 @@ mod tests {
         vec.extend_from_slice(&[Width(0); 300]);
         vec.extend_from_slice(&[Width(2); 3]);
 
-        let mut rope = Rope::from(vec);
+        let mut rope = Rope::<Width, 9, 5>::from(vec);
         rope.remove_inclusive(2..2, usize::cmp);
 
         assert_eq!(
@@ -2080,7 +2069,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn remove_07() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
         #[allow(clippy::reversed_empty_ranges)]
         rope.remove_inclusive(56..55, usize::cmp); // Wrong ordering of start/end on purpose.
     }
@@ -2088,13 +2077,13 @@ mod tests {
     #[test]
     #[should_panic]
     fn remove_08() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
         rope.remove_inclusive(134..136, usize::cmp); // Removing past the end
     }
 
     #[test]
     fn split_off_01() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let split = rope.split_off(50, usize::cmp);
         assert_eq!(rope, &pseudo_random()[..24]);
@@ -2108,7 +2097,7 @@ mod tests {
 
     #[test]
     fn split_off_02() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let split = rope.split_off(1, usize::cmp);
         assert_eq!(rope, [Width(1)].as_slice());
@@ -2122,7 +2111,7 @@ mod tests {
 
     #[test]
     fn split_off_03() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let split = rope.split_off(134, usize::cmp);
         assert_eq!(rope, &pseudo_random()[..69]);
@@ -2136,7 +2125,7 @@ mod tests {
 
     #[test]
     fn split_off_04() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let split = rope.split_off(0, usize::cmp);
         assert_eq!(rope, [].as_slice());
@@ -2150,7 +2139,7 @@ mod tests {
 
     #[test]
     fn split_off_05() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let split = rope.split_off(135, usize::cmp);
         assert_eq!(rope, pseudo_random().as_slice());
@@ -2165,14 +2154,14 @@ mod tests {
     #[test]
     #[should_panic]
     fn split_off_06() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
         rope.split_off(136, usize::cmp); // One past the end of the rope
     }
 
     #[test]
     fn append_01() {
-        let mut rope = Rope::from_slice(&pseudo_random()[..35]);
-        let append = Rope::from_slice(&pseudo_random()[35..]);
+        let mut rope = Rope::<Width, 9, 5>::from_slice(&pseudo_random()[..35]);
+        let append = Rope::<Width, 9, 5>::from_slice(&pseudo_random()[35..]);
 
         rope.append(append);
         assert_eq!(rope, pseudo_random().as_slice());
@@ -2183,8 +2172,8 @@ mod tests {
 
     #[test]
     fn append_02() {
-        let mut rope = Rope::from_slice(&pseudo_random()[..68]);
-        let append = Rope::from_slice(&[Width(3), Width(0)]);
+        let mut rope = Rope::<Width, 9, 5>::from_slice(&pseudo_random()[..68]);
+        let append = Rope::<Width, 9, 5>::from_slice(&[Width(3), Width(0)]);
 
         rope.append(append);
         assert_eq!(rope, pseudo_random());
@@ -2195,8 +2184,8 @@ mod tests {
 
     #[test]
     fn append_03() {
-        let mut rope = Rope::from_slice(&[Width(1), Width(2)]);
-        let append = Rope::from_slice(&pseudo_random()[2..]);
+        let mut rope = Rope::<Width, 9, 5>::from_slice(&[Width(1), Width(2)]);
+        let append = Rope::<Width, 9, 5>::from_slice(&pseudo_random()[2..]);
 
         rope.append(append);
         assert_eq!(rope, pseudo_random());
@@ -2207,8 +2196,8 @@ mod tests {
 
     #[test]
     fn append_04() {
-        let mut rope = Rope::from(pseudo_random());
-        let append = Rope::from_slice([].as_slice());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
+        let append = Rope::<Width, 9, 5>::from_slice([].as_slice());
 
         rope.append(append);
         assert_eq!(rope, pseudo_random());
@@ -2219,8 +2208,8 @@ mod tests {
 
     #[test]
     fn append_05() {
-        let mut rope = Rope::from_slice([].as_slice());
-        let append = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from_slice([].as_slice());
+        let append = Rope::<Width, 9, 5>::from(pseudo_random());
 
         rope.append(append);
         assert_eq!(rope, pseudo_random());
@@ -2231,7 +2220,7 @@ mod tests {
 
     #[test]
     fn measure_to_index_01() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         assert_eq!(rope.start_measure_to_index(0, usize::cmp), 0);
         assert_eq!(rope.start_measure_to_index(1, usize::cmp), 1);
@@ -2248,7 +2237,7 @@ mod tests {
 
     #[test]
     fn from_index_01() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         assert_eq!(rope.from_index(0), (0, Width(1)));
 
@@ -2260,20 +2249,20 @@ mod tests {
     #[test]
     #[should_panic]
     fn from_index_02() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         rope.from_index(70);
     }
 
     #[test]
     #[should_panic]
     fn from_index_03() {
-        let rope: Rope<Width> = Rope::from_slice(&[]);
+        let rope: Rope<Width, 9, 5> = Rope::<Width, 9, 5>::from_slice(&[]);
         rope.from_index(0);
     }
 
     #[test]
     fn from_measure_01() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         assert_eq!(rope.from_measure(0, usize::cmp), (0, Width(1)));
         assert_eq!(rope.from_measure(10, usize::cmp), (7, Width(5)));
@@ -2284,20 +2273,20 @@ mod tests {
     #[test]
     #[should_panic]
     fn from_measure_02() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         rope.from_measure(136, usize::cmp);
     }
 
     #[test]
     #[should_panic]
     fn from_measure_03() {
-        let rope: Rope<Width> = Rope::from_slice(&[]);
+        let rope: Rope<Width, 9, 5> = Rope::<Width, 9, 5>::from_slice(&[]);
         rope.from_measure(0, usize::cmp);
     }
 
     #[test]
     fn chunk_at_index() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         let lorem_ipsum = pseudo_random();
         let mut total = lorem_ipsum.as_slice();
 
@@ -2323,7 +2312,7 @@ mod tests {
 
     #[test]
     fn chunk_at_measure() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         let lorem_ipsum = pseudo_random();
         let mut total = lorem_ipsum.as_slice();
 
@@ -2353,7 +2342,7 @@ mod tests {
 
     #[test]
     fn measure_slice_01() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let slice = rope.measure_slice(0..rope.measure(), usize::cmp);
 
@@ -2362,7 +2351,7 @@ mod tests {
 
     #[test]
     fn measure_slice_02() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let slice = rope.measure_slice(5..21, usize::cmp);
 
@@ -2371,7 +2360,7 @@ mod tests {
 
     #[test]
     fn measure_slice_03() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let slice = rope.measure_slice(31..135, usize::cmp);
 
@@ -2380,7 +2369,7 @@ mod tests {
 
     #[test]
     fn measure_slice_04() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let slice = rope.measure_slice(53..53, usize::cmp);
 
@@ -2390,7 +2379,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn measure_slice_05() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         #[allow(clippy::reversed_empty_ranges)]
         rope.measure_slice(53..52, usize::cmp); // Wrong ordering on purpose.
     }
@@ -2398,13 +2387,13 @@ mod tests {
     #[test]
     #[should_panic]
     fn measure_slice_06() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         rope.measure_slice(134..136, usize::cmp);
     }
 
     #[test]
     fn index_slice_01() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let slice = rope.index_slice(0..rope.len());
 
@@ -2413,7 +2402,7 @@ mod tests {
 
     #[test]
     fn index_slice_02() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let slice = rope.index_slice(5..21);
 
@@ -2422,7 +2411,7 @@ mod tests {
 
     #[test]
     fn index_slice_03() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let slice = rope.index_slice(31..55);
 
@@ -2431,7 +2420,7 @@ mod tests {
 
     #[test]
     fn index_slice_04() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         let slice = rope.index_slice(53..53);
 
@@ -2441,7 +2430,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn index_slice_05() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         #[allow(clippy::reversed_empty_ranges)]
         rope.index_slice(53..52); // Wrong ordering on purpose.
     }
@@ -2449,27 +2438,27 @@ mod tests {
     #[test]
     #[should_panic]
     fn index_slice_06() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         rope.index_slice(20..72);
     }
 
     #[test]
     fn eq_rope_01() {
-        let rope: Rope<Width> = Rope::from_slice([].as_slice());
+        let rope: Rope<Width, 9, 5> = Rope::<Width, 9, 5>::from_slice([].as_slice());
 
         assert_eq!(rope, rope);
     }
 
     #[test]
     fn eq_rope_02() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         assert_eq!(rope, rope);
     }
 
     #[test]
     fn eq_rope_03() {
-        let rope_1 = Rope::from(pseudo_random());
+        let rope_1 = Rope::<Width, 9, 5>::from(pseudo_random());
         let mut rope_2 = rope_1.clone();
         rope_2.remove_inclusive(26..27, usize::cmp);
         rope_2.insert(26, Width(1000), usize::cmp);
@@ -2479,7 +2468,7 @@ mod tests {
 
     #[test]
     fn eq_rope_04() {
-        let rope: Rope<Width> = Rope::from_slice([].as_slice());
+        let rope: Rope<Width, 9, 5> = Rope::<Width, 9, 5>::from_slice([].as_slice());
 
         assert_eq!(rope, [].as_slice());
         assert_eq!([].as_slice(), rope);
@@ -2487,7 +2476,7 @@ mod tests {
 
     #[test]
     fn eq_rope_05() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
 
         assert_eq!(rope, pseudo_random());
         assert_eq!(pseudo_random(), rope);
@@ -2495,7 +2484,7 @@ mod tests {
 
     #[test]
     fn eq_rope_06() {
-        let mut rope = Rope::from(pseudo_random());
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
         rope.remove_inclusive(26..27, usize::cmp);
         rope.insert(26, Width(5000), usize::cmp);
 
@@ -2505,7 +2494,7 @@ mod tests {
 
     #[test]
     fn eq_rope_07() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         let slice: Vec<Width> = pseudo_random();
 
         assert_eq!(rope, slice);
@@ -2514,7 +2503,7 @@ mod tests {
 
     #[test]
     fn to_vec_01() {
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         let slice: Vec<Width> = (&rope).into();
 
         assert_eq!(rope, slice);
@@ -2523,7 +2512,7 @@ mod tests {
     #[test]
     fn to_cow_01() {
         use std::borrow::Cow;
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         let cow: Cow<[Width]> = (&rope).into();
 
         assert_eq!(rope, cow);
@@ -2532,7 +2521,7 @@ mod tests {
     #[test]
     fn to_cow_02() {
         use std::borrow::Cow;
-        let rope = Rope::from(pseudo_random());
+        let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         let cow: Cow<[Width]> = (rope.clone()).into();
 
         assert_eq!(rope, cow);
@@ -2541,7 +2530,7 @@ mod tests {
     #[test]
     fn to_cow_03() {
         use std::borrow::Cow;
-        let rope = Rope::from_slice(&[Width(1)]);
+        let rope = Rope::<Width, 9, 5>::from_slice(&[Width(1)]);
         let cow: Cow<[Width]> = (&rope).into();
 
         // Make sure it'slice borrowed.
@@ -2554,9 +2543,9 @@ mod tests {
 
     #[test]
     fn from_rope_slice_01() {
-        let rope_1 = Rope::from(pseudo_random());
+        let rope_1 = Rope::<Width, 9, 5>::from(pseudo_random());
         let slice = rope_1.measure_slice(.., usize::cmp);
-        let rope_2: Rope<Width> = slice.into();
+        let rope_2: Rope<Width, 9, 5> = slice.into();
 
         assert_eq!(rope_1, rope_2);
         assert_eq!(slice, rope_2);
@@ -2564,42 +2553,43 @@ mod tests {
 
     #[test]
     fn from_rope_slice_02() {
-        let rope_1 = Rope::from(pseudo_random());
+        let rope_1 = Rope::<Width, 9, 5>::from(pseudo_random());
         let slice = rope_1.measure_slice(0..24, usize::cmp);
-        let rope_2: Rope<Width> = slice.into();
+        let rope_2: Rope<Width, 9, 5> = slice.into();
 
         assert_eq!(slice, rope_2);
     }
 
     #[test]
     fn from_rope_slice_03() {
-        let rope_1 = Rope::from(pseudo_random());
+        let rope_1 = Rope::<Width, 9, 5>::from(pseudo_random());
         let slice = rope_1.measure_slice(13..89, usize::cmp);
-        let rope_2: Rope<Width> = slice.into();
+        let rope_2: Rope<Width, 9, 5> = slice.into();
 
         assert_eq!(slice, rope_2);
     }
 
     #[test]
     fn from_rope_slice_04() {
-        let rope_1 = Rope::from(pseudo_random());
+        let rope_1 = Rope::<Width, 9, 5>::from(pseudo_random());
         let slice = rope_1.measure_slice(13..41, usize::cmp);
-        let rope_2: Rope<Width> = slice.into();
+        let rope_2: Rope<Width, 9, 5> = slice.into();
 
         assert_eq!(slice, rope_2);
     }
 
     #[test]
     fn from_iter_01() {
-        let rope_1 = Rope::from(pseudo_random());
-        let rope_2 = Rope::from_iter(rope_1.chunks());
+        let rope_1 = Rope::<Width, 9, 5>::from(pseudo_random());
+        let rope_2 = Rope::<Width, 9, 5>::from_iter(rope_1.chunks());
 
         assert_eq!(rope_1, rope_2);
     }
 
     #[test]
     fn is_instance_01() {
-        let rope = Rope::from_slice(&[Width(1), Width(2), Width(10), Width(0), Width(0)]);
+        let rope =
+            Rope::<Width, 9, 5>::from_slice(&[Width(1), Width(2), Width(10), Width(0), Width(0)]);
         let mut c1 = rope.clone();
         let c2 = c1.clone();
 
@@ -2615,12 +2605,12 @@ mod tests {
     }
 
     // Helper function to compute the actual measure by iterating (O(N))
-    fn compute_actual_measure(rope: &Rope<Width>) -> usize {
+    fn compute_actual_measure(rope: &Rope<Width, 9, 5>) -> usize {
         rope.iter().map(|(_, w)| w.0).sum()
     }
 
     // Helper function to compute the actual length by iterating (O(N))
-    fn compute_actual_len(rope: &Rope<Width>) -> usize {
+    fn compute_actual_len(rope: &Rope<Width, 9, 5>) -> usize {
         rope.iter().count()
     }
 
@@ -2629,31 +2619,35 @@ mod tests {
     #[test]
     fn cached_info_matches_actual_after_creation() {
         // Test with empty rope
-        let empty_rope: Rope<Width> = Rope::new();
+        let empty_rope: Rope<Width, 9, 5> = Rope::<Width, 9, 5>::new();
         assert_eq!(empty_rope.measure(), compute_actual_measure(&empty_rope));
         assert_eq!(empty_rope.len(), compute_actual_len(&empty_rope));
 
         // Test with small rope
-        let small_rope = Rope::from_slice(&[Width(1), Width(2), Width(3)]);
+        let small_rope = Rope::<Width, 9, 5>::from_slice(&[Width(1), Width(2), Width(3)]);
         assert_eq!(small_rope.measure(), compute_actual_measure(&small_rope));
         assert_eq!(small_rope.len(), compute_actual_len(&small_rope));
 
         // Test with larger rope (uses pseudo_random which creates a bigger rope)
-        let large_rope = Rope::from(pseudo_random());
+        let large_rope = Rope::<Width, 9, 5>::from(pseudo_random());
         assert_eq!(large_rope.measure(), compute_actual_measure(&large_rope));
         assert_eq!(large_rope.len(), compute_actual_len(&large_rope));
 
         // Test with zero-width elements
-        let zero_width_rope = Rope::from_slice(&[Width(0), Width(0), Width(5), Width(0)]);
-        assert_eq!(zero_width_rope.measure(), compute_actual_measure(&zero_width_rope));
+        let zero_width_rope =
+            Rope::<Width, 9, 5>::from_slice(&[Width(0), Width(0), Width(5), Width(0)]);
+        assert_eq!(
+            zero_width_rope.measure(),
+            compute_actual_measure(&zero_width_rope)
+        );
         assert_eq!(zero_width_rope.len(), compute_actual_len(&zero_width_rope));
     }
 
     /// Test that cached info stays correct after insert operations
     #[test]
     fn cached_info_correct_after_insert() {
-        let mut rope = Rope::from_slice(&[Width(1), Width(2), Width(3)]);
-        
+        let mut rope = Rope::<Width, 9, 5>::from_slice(&[Width(1), Width(2), Width(3)]);
+
         // Insert at beginning
         rope.insert_slice(0, &[Width(10)], usize::cmp);
         assert_eq!(rope.measure(), compute_actual_measure(&rope));
@@ -2670,7 +2664,7 @@ mod tests {
         assert_eq!(rope.len(), compute_actual_len(&rope));
 
         // Multiple inserts on larger rope
-        let mut large_rope = Rope::from(pseudo_random());
+        let mut large_rope = Rope::<Width, 9, 5>::from(pseudo_random());
         for i in 0..10 {
             large_rope.insert_slice(i * 5, &[Width(i)], usize::cmp);
             assert_eq!(large_rope.measure(), compute_actual_measure(&large_rope));
@@ -2681,8 +2675,9 @@ mod tests {
     /// Test that cached info stays correct after remove operations
     #[test]
     fn cached_info_correct_after_remove() {
-        let mut rope = Rope::from_slice(&[Width(1), Width(2), Width(3), Width(4), Width(5)]);
-        
+        let mut rope =
+            Rope::<Width, 9, 5>::from_slice(&[Width(1), Width(2), Width(3), Width(4), Width(5)]);
+
         // Remove from middle
         rope.remove_inclusive(2..4, usize::cmp);
         assert_eq!(rope.measure(), compute_actual_measure(&rope));
@@ -2694,7 +2689,7 @@ mod tests {
         assert_eq!(rope.len(), compute_actual_len(&rope));
 
         // Multiple removes on larger rope
-        let mut large_rope = Rope::from(pseudo_random());
+        let mut large_rope = Rope::<Width, 9, 5>::from(pseudo_random());
         let initial_measure = large_rope.measure();
         for i in 0..5 {
             if large_rope.measure() > 10 {
@@ -2714,8 +2709,9 @@ mod tests {
     /// Test that cached info stays correct after split_off operations
     #[test]
     fn cached_info_correct_after_split() {
-        let mut rope = Rope::from_slice(&[Width(1), Width(2), Width(3), Width(4), Width(5)]);
-        
+        let mut rope =
+            Rope::<Width, 9, 5>::from_slice(&[Width(1), Width(2), Width(3), Width(4), Width(5)]);
+
         // Split in middle
         let right = rope.split_off(6, usize::cmp);
         assert_eq!(rope.measure(), compute_actual_measure(&rope));
@@ -2724,7 +2720,7 @@ mod tests {
         assert_eq!(right.len(), compute_actual_len(&right));
 
         // Split larger rope multiple times
-        let mut large_rope = Rope::from(pseudo_random());
+        let mut large_rope = Rope::<Width, 9, 5>::from(pseudo_random());
         for _ in 0..3 {
             if large_rope.measure() > 20 {
                 let split_point = large_rope.measure() / 2;
@@ -2740,16 +2736,16 @@ mod tests {
     /// Test that cached info stays correct after append operations
     #[test]
     fn cached_info_correct_after_append() {
-        let mut rope1 = Rope::from_slice(&[Width(1), Width(2), Width(3)]);
-        let rope2 = Rope::from_slice(&[Width(4), Width(5), Width(6)]);
-        
+        let mut rope1 = Rope::<Width, 9, 5>::from_slice(&[Width(1), Width(2), Width(3)]);
+        let rope2 = Rope::<Width, 9, 5>::from_slice(&[Width(4), Width(5), Width(6)]);
+
         rope1.append(rope2);
         assert_eq!(rope1.measure(), compute_actual_measure(&rope1));
         assert_eq!(rope1.len(), compute_actual_len(&rope1));
 
         // Append to larger rope
-        let mut large_rope = Rope::from(pseudo_random());
-        let to_append = Rope::from_slice(&[Width(100), Width(200)]);
+        let mut large_rope = Rope::<Width, 9, 5>::from(pseudo_random());
+        let to_append = Rope::<Width, 9, 5>::from_slice(&[Width(100), Width(200)]);
         large_rope.append(to_append);
         assert_eq!(large_rope.measure(), compute_actual_measure(&large_rope));
         assert_eq!(large_rope.len(), compute_actual_len(&large_rope));
@@ -2758,8 +2754,8 @@ mod tests {
     /// Comprehensive test: mix of all operations
     #[test]
     fn cached_info_correct_after_mixed_operations() {
-        let mut rope = Rope::from(pseudo_random());
-        
+        let mut rope = Rope::<Width, 9, 5>::from(pseudo_random());
+
         // Verify initial state
         assert_eq!(rope.measure(), compute_actual_measure(&rope));
         assert_eq!(rope.len(), compute_actual_len(&rope));

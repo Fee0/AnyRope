@@ -1,5 +1,5 @@
 use any_rope::{Measurable, Rope};
-use rand::Rng;
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Lipsum {
@@ -29,11 +29,13 @@ impl Measurable for Lipsum {
 }
 use self::Lipsum::*;
 
+type TestRope = Rope<Lipsum, 9, 5>;
+
 /// 70 elements, total width of 135.
 #[test]
 #[cfg_attr(miri, ignore)]
 fn from_str() {
-    let mut rng = rand::thread_rng();
+    let mut rng = StdRng::seed_from_u64(0);
 
     let small_vec: Vec<Lipsum> = {
         (0..1000)
@@ -53,7 +55,7 @@ fn from_str() {
             .collect()
     };
     // Build rope from file contents
-    let rope = Rope::from_slice(small_vec.as_slice());
+    let rope = TestRope::from_slice(small_vec.as_slice());
 
     // Verify rope integrity
     rope.assert_integrity();

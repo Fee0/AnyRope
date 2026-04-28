@@ -1,45 +1,47 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use crate::{
-    fallible_min,
+    Measurable, fallible_min,
     slice_utils::{end_measure_to_index, index_to_measure, start_measure_to_index},
     tree::{
-        max_children, max_len, min_children, min_len, BranchChildren, Count, LeafSlice, SliceInfo,
+        BranchChildren, Count, DEFAULT_BRANCH_CAP, DEFAULT_LEAF_CAP, LeafSlice, SliceInfo,
+        min_children, min_len,
     },
-    Measurable,
 };
 
 #[derive(Debug, Clone)]
 #[repr(u8, C)]
-pub(crate) enum Node<M>
-where
+pub(crate) enum Node<
+    M,
+    const LEAF_CAP: usize = DEFAULT_LEAF_CAP,
+    const BRANCH_CAP: usize = DEFAULT_BRANCH_CAP,
+> where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
-    Leaf(LeafSlice<M>, SliceInfo<M::Measure>),
-    Branch(BranchChildren<M>),
+    Leaf(LeafSlice<M, LEAF_CAP>, SliceInfo<M::Measure>),
+    Branch(BranchChildren<M, LEAF_CAP, BRANCH_CAP>),
 }
 
-impl<M> Node<M>
+impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize> Node<M, LEAF_CAP, BRANCH_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
-    /// Creates an empty [`Node<M>`].
+    /// Creates an empty [`Node<M, LEAF_CAP, BRANCH_CAP>`].
     #[inline(always)]
     pub fn new() -> Self {
-        Node::Leaf(LeafSlice::from_slice(&[]), SliceInfo::<M::Measure>::new::<M>())
+        Node::Leaf(
+            LeafSlice::from_slice(&[]),
+            SliceInfo::<M::Measure>::new::<M>(),
+        )
     }
 
-    /// Total number of items in the [`Node<M>`].
+    /// Total number of items in the [`Node<M, LEAF_CAP, BRANCH_CAP>`].
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.info().len as usize
     }
 
-    /// Total [`M::Measure`] in the [`Node<M>`]
+    /// Total [`M::Measure`] in the [`Node<M, LEAF_CAP, BRANCH_CAP>`]
     ///
     /// [`M::Measure`]: Measurable::Measure
     #[inline(always)]
@@ -61,18 +63,18 @@ where
     /// and takes essentially same parameters and returns the same things as
     /// the method itself. In particular, the closure receives the width offset
     /// of the width within the given chunk and the [`SliceInfo`] of the chunk.
-    /// The main difference is that it receives a [`LeafSlice<M>`] instead of a
+    /// The main difference is that it receives a [`LeafSlice<M, LEAF_CAP>`] instead of a
     /// node.
     ///
     /// The closure is expected to return the updated [`SliceInfo`] of the
-    /// [`Node<M>`], and if the node had to be split, then it also returns
-    /// the right-hand [`Node<M>`] along with its [`SliceInfo`] as well.
+    /// [`Node<M, LEAF_CAP, BRANCH_CAP>`], and if the node had to be split, then it also returns
+    /// the right-hand [`Node<M, LEAF_CAP, BRANCH_CAP>`] along with its [`SliceInfo`] as well.
     ///
     /// The main method call will then return the total updated [`SliceInfo`]
-    /// for the whole tree, and a new [`Node<M>`] only if the whole tree had
+    /// for the whole tree, and a new [`Node<M, LEAF_CAP, BRANCH_CAP>`] only if the whole tree had
     /// to be split. It is up to the caller to check for that new
-    /// [`Node<M>`], and handle it by creating a new root with both the
-    /// original [`Node<M>`] and the new node as children.
+    /// [`Node<M, LEAF_CAP, BRANCH_CAP>`], and handle it by creating a new root with both the
+    /// original [`Node<M, LEAF_CAP, BRANCH_CAP>`] and the new node as children.
     pub fn edit_chunk_at_measure<F>(
         &mut self,
         measure: M::Measure,
@@ -81,16 +83,16 @@ where
         mut edit: F,
     ) -> (
         SliceInfo<M::Measure>,
-        Option<(SliceInfo<M::Measure>, Arc<Node<M>>)>,
+        Option<(SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>)>,
     )
     where
         F: FnMut(
             M::Measure,
             SliceInfo<M::Measure>,
-            &mut LeafSlice<M>,
+            &mut LeafSlice<M, LEAF_CAP>,
         ) -> (
             SliceInfo<M::Measure>,
-            Option<(SliceInfo<M::Measure>, Arc<Node<M>>)>,
+            Option<(SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>)>,
         ),
     {
         match self {
@@ -105,13 +107,10 @@ where
                 // ballooning when repeatedly appending to the end of a rope.
                 // The constant here was arrived at experimentally, and is otherwise
                 // fairly arbitrary.
-                const fn frag_min_bytes<M: Measurable>() -> usize {
-                    (max_len::<M, M::Measure>() * min_children::<M, M::Measure>())
-                        + (max_len::<M, M::Measure>() / 32)
-                }
+                let frag_min_bytes = (LEAF_CAP * min_children(BRANCH_CAP)) + (LEAF_CAP / 32);
                 if children.is_full()
                     && children.nodes()[0].is_leaf()
-                    && (children.combined_info().len as usize) < frag_min_bytes::<M>()
+                    && (children.combined_info().len as usize) < frag_min_bytes
                 {
                     children.compact_leaves();
                 }
@@ -128,7 +127,7 @@ where
 
                 // Handle the residual node if there is one and return.
                 if let Some((r_info, r_node)) = residual {
-                    if children.len() < max_children::<M, M::Measure>() {
+                    if children.len() < BRANCH_CAP {
                         children.insert(child_i + 1, (r_info, r_node));
                         (info - child_info + l_info + r_info, None)
                     } else {
@@ -179,11 +178,15 @@ where
         }
     }
 
-    pub fn append_at_depth(&mut self, mut other: Arc<Node<M>>, depth: usize) -> Option<Arc<Self>> {
+    pub fn append_at_depth(
+        &mut self,
+        mut other: Arc<Node<M, LEAF_CAP, BRANCH_CAP>>,
+        depth: usize,
+    ) -> Option<Arc<Self>> {
         if depth == 0 {
             if let Node::Branch(ref mut children_l) = *self {
                 if let Node::Branch(ref mut children_r) = *Arc::make_mut(&mut other) {
-                    if (children_l.len() + children_r.len()) <= max_children::<M, M::Measure>() {
+                    if (children_l.len() + children_r.len()) <= BRANCH_CAP {
                         for _ in 0..children_r.len() {
                             children_l.push(children_r.remove(0));
                         }
@@ -206,7 +209,7 @@ where
                 Arc::make_mut(&mut children.nodes_mut()[last_i]).append_at_depth(other, depth - 1);
             children.update_child_info(last_i);
             if let Some(extra_node) = residual {
-                if children.len() < max_children::<M, M::Measure>() {
+                if children.len() < BRANCH_CAP {
                     children.push((extra_node.info(), extra_node));
                     return None;
                 } else {
@@ -221,7 +224,11 @@ where
         }
     }
 
-    pub fn prepend_at_depth(&mut self, other: Arc<Node<M>>, depth: usize) -> Option<Arc<Self>> {
+    pub fn prepend_at_depth(
+        &mut self,
+        other: Arc<Node<M, LEAF_CAP, BRANCH_CAP>>,
+        depth: usize,
+    ) -> Option<Arc<Self>> {
         if depth == 0 {
             match *self {
                 Node::Leaf(_, _) => {
@@ -234,8 +241,7 @@ where
                 Node::Branch(ref mut children_r) => {
                     let mut other = other;
                     if let Node::Branch(ref mut children_l) = *Arc::make_mut(&mut other) {
-                        if (children_l.len() + children_r.len()) <= max_children::<M, M::Measure>()
-                        {
+                        if (children_l.len() + children_r.len()) <= BRANCH_CAP {
                             for _ in 0..children_l.len() {
                                 children_r.insert(0, children_l.pop());
                             }
@@ -255,7 +261,7 @@ where
                 Arc::make_mut(&mut children.nodes_mut()[0]).prepend_at_depth(other, depth - 1);
             children.update_child_info(0);
             if let Some(extra_node) = residual {
-                if children.len() < max_children::<M, M::Measure>() {
+                if children.len() < BRANCH_CAP {
                     children.insert(0, (extra_node.info(), extra_node));
                     return None;
                 } else {
@@ -271,7 +277,7 @@ where
         }
     }
 
-    /// Splits the [`Node<M>`] at `measure`, returning the right side of the
+    /// Splits the [`Node<M, LEAF_CAP, BRANCH_CAP>`] at `measure`, returning the right side of the
     /// split.
     pub fn end_split(
         &mut self,
@@ -314,7 +320,7 @@ where
         }
     }
 
-    /// Splits the [`Node<M>`] index `width`, returning the right side of the
+    /// Splits the [`Node<M, LEAF_CAP, BRANCH_CAP>`] index `width`, returning the right side of the
     /// split.
     pub fn start_split(
         &mut self,
@@ -488,14 +494,14 @@ where
         }
     }
 
-    pub fn children(&self) -> &BranchChildren<M> {
+    pub fn children(&self) -> &BranchChildren<M, LEAF_CAP, BRANCH_CAP> {
         match *self {
             Node::Branch(ref children) => children,
             _ => panic!(),
         }
     }
 
-    pub fn children_mut(&mut self) -> &mut BranchChildren<M> {
+    pub fn children_mut(&mut self) -> &mut BranchChildren<M, LEAF_CAP, BRANCH_CAP> {
         match *self {
             Node::Branch(ref mut children) => children,
             _ => panic!(),
@@ -509,7 +515,7 @@ where
         }
     }
 
-    pub fn leaf_slice_mut(&mut self) -> &mut LeafSlice<M> {
+    pub fn leaf_slice_mut(&mut self) -> &mut LeafSlice<M, LEAF_CAP> {
         match *self {
             Node::Leaf(ref mut slice, _) => slice,
             _ => panic!(),
@@ -525,8 +531,8 @@ where
 
     pub fn is_undersized(&self) -> bool {
         match *self {
-            Node::Leaf(ref slice, _) => slice.len() < min_len::<M, M::Measure>(),
-            Node::Branch(ref children) => children.len() < min_children::<M, M::Measure>(),
+            Node::Leaf(ref slice, _) => slice.len() < min_len(LEAF_CAP),
+            Node::Branch(ref children) => children.len() < min_children(BRANCH_CAP),
         }
     }
 
@@ -593,7 +599,7 @@ where
                 if is_root {
                     assert!(children.len() > 1);
                 } else {
-                    assert!(children.len() >= min_children::<M, M::Measure>());
+                    assert!(children.len() >= min_children(BRANCH_CAP));
                 }
 
                 for node in children.nodes() {
@@ -613,10 +619,8 @@ where
             loop {
                 let do_merge = (children.len() > 1)
                     && match *children.nodes()[0] {
-                        Node::Leaf(ref slice, _) => slice.len() < min_len::<M, M::Measure>(),
-                        Node::Branch(ref children2) => {
-                            children2.len() < min_children::<M, M::Measure>()
-                        }
+                        Node::Leaf(ref slice, _) => slice.len() < min_len(LEAF_CAP),
+                        Node::Branch(ref children2) => children2.len() < min_children(BRANCH_CAP),
                     };
 
                 if do_merge {
@@ -644,10 +648,8 @@ where
                 let last_i = children.len() - 1;
                 let do_merge = (children.len() > 1)
                     && match *children.nodes()[last_i] {
-                        Node::Leaf(ref slice, _) => slice.len() < min_len::<M, M::Measure>(),
-                        Node::Branch(ref children2) => {
-                            children2.len() < min_children::<M, M::Measure>()
-                        }
+                        Node::Leaf(ref slice, _) => slice.len() < min_len(LEAF_CAP),
+                        Node::Branch(ref children2) => children2.len() < min_children(BRANCH_CAP),
                     };
 
                 if do_merge {
@@ -682,10 +684,8 @@ where
                 if children.len() > 1 {
                     let (child_i, start_info) = children.search_start_measure(measure, cmp);
                     let mut do_merge = match *children.nodes()[child_i] {
-                        Node::Leaf(ref slice, _) => slice.len() < min_len::<M, M::Measure>(),
-                        Node::Branch(ref children2) => {
-                            children2.len() < min_children::<M, M::Measure>()
-                        }
+                        Node::Leaf(ref slice, _) => slice.len() < min_len(LEAF_CAP),
+                        Node::Branch(ref children2) => children2.len() < min_children(BRANCH_CAP),
                     };
 
                     if child_i == 0 {
@@ -696,11 +696,9 @@ where
                         do_merge |= {
                             cmp(&start_info.measure, &measure).is_eq()
                                 && match *children.nodes()[child_i - 1] {
-                                    Node::Leaf(ref slice, _) => {
-                                        slice.len() < min_len::<M, M::Measure>()
-                                    }
+                                    Node::Leaf(ref slice, _) => slice.len() < min_len(LEAF_CAP),
                                     Node::Branch(ref children2) => {
-                                        children2.len() < min_children::<M, M::Measure>()
+                                        children2.len() < min_children(BRANCH_CAP)
                                     }
                                 }
                         };
@@ -737,8 +735,8 @@ where
     }
 }
 
-fn remove_from_slice<M>(
-    slice: &mut LeafSlice<M>,
+fn remove_from_slice<M, const LEAF_CAP: usize>(
+    slice: &mut LeafSlice<M, LEAF_CAP>,
     start: M::Measure,
     end: M::Measure,
     cmp: &impl Fn(&M::Measure, &M::Measure) -> Ordering,
@@ -747,8 +745,6 @@ fn remove_from_slice<M>(
 ) -> (SliceInfo<M::Measure>, bool)
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     let start_index = if incl_left {
         start_measure_to_index(slice, start, cmp)
@@ -776,8 +772,8 @@ where
     (SliceInfo::<M::Measure>::from_slice(slice), false)
 }
 
-fn remove_from_children<M>(
-    children: &mut BranchChildren<M>,
+fn remove_from_children<M, const LEAF_CAP: usize, const BRANCH_CAP: usize>(
+    children: &mut BranchChildren<M, LEAF_CAP, BRANCH_CAP>,
     start: M::Measure,
     end: M::Measure,
     cmp: &impl Fn(&M::Measure, &M::Measure) -> Ordering,
@@ -787,8 +783,6 @@ fn remove_from_children<M>(
 ) -> (SliceInfo<M::Measure>, bool)
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     let ((left_child, left_accum), (right_child, right_accum)) =
         children.search_measure_range(start, end, cmp);
@@ -886,8 +880,8 @@ where
 ///
 /// - Whether the tree may need invariant fixing.
 /// - Updated SliceInfo of the node.
-fn handle_measure_range<M>(
-    children: &mut BranchChildren<M>,
+fn handle_measure_range<M, const LEAF_CAP: usize, const BRANCH_CAP: usize>(
+    children: &mut BranchChildren<M, LEAF_CAP, BRANCH_CAP>,
     child_i: usize,
     accum: M::Measure,
     start_measure: M::Measure,
@@ -898,8 +892,6 @@ fn handle_measure_range<M>(
 ) -> (SliceInfo<M::Measure>, bool)
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     // Recurse into child
     let child_measure = children.info()[child_i].measure;
@@ -922,11 +914,11 @@ where
 }
 
 /// Merges a child with its sibling.
-fn merge_child<M>(children: &mut BranchChildren<M>, child_i: usize)
-where
+fn merge_child<M, const LEAF_CAP: usize, const BRANCH_CAP: usize>(
+    children: &mut BranchChildren<M, LEAF_CAP, BRANCH_CAP>,
+    child_i: usize,
+) where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     if child_i < children.len() && children.len() > 1 && children.nodes()[child_i].is_undersized() {
         if child_i == 0 {

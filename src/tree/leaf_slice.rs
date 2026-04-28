@@ -1,24 +1,21 @@
 use std::{borrow::Borrow, ops::Deref};
 
 use self::inner::LeafSmallVec;
-use super::max_len;
-use crate::{max_children, Measurable};
+use crate::{DEFAULT_LEAF_CAP, Measurable};
 
 /// A custom small string.  The unsafe guts of this are in [`LeafSmallVec`]
 /// further down in this file.
 #[derive(Clone, Default)]
 #[repr(C)]
-pub(crate) struct LeafSlice<M>(inner::LeafSmallVec<M>)
+pub(crate) struct LeafSlice<M, const LEAF_CAP: usize = DEFAULT_LEAF_CAP>(
+    inner::LeafSmallVec<M, LEAF_CAP>,
+)
 where
-    M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized;
+    M: Measurable;
 
-impl<M> LeafSlice<M>
+impl<M, const LEAF_CAP: usize> LeafSlice<M, LEAF_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     /// Creates a new [`Leaf`] from a slice.
     pub fn from_slice(value: &[M]) -> Self {
@@ -90,11 +87,9 @@ where
     }
 }
 
-impl<M> std::cmp::PartialEq for LeafSlice<M>
+impl<M, const LEAF_CAP: usize> std::cmp::PartialEq for LeafSlice<M, LEAF_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn eq(&self, other: &Self) -> bool {
         let (s1, s2): (&[M], &[M]) = (self, other);
@@ -102,33 +97,27 @@ where
     }
 }
 
-impl<'a, M> PartialEq<LeafSlice<M>> for &'a [M]
+impl<'a, M, const LEAF_CAP: usize> PartialEq<LeafSlice<M, LEAF_CAP>> for &'a [M]
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
-    fn eq(&self, other: &LeafSlice<M>) -> bool {
+    fn eq(&self, other: &LeafSlice<M, LEAF_CAP>) -> bool {
         *self == (other as &[M])
     }
 }
 
-impl<'a, M> PartialEq<&'a [M]> for LeafSlice<M>
+impl<'a, M, const LEAF_CAP: usize> PartialEq<&'a [M]> for LeafSlice<M, LEAF_CAP>
 where
     M: Measurable + PartialEq,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn eq(&self, other: &&'a [M]) -> bool {
         (self as &[M]) == *other
     }
 }
 
-impl<M> std::fmt::Display for LeafSlice<M>
+impl<M, const LEAF_CAP: usize> std::fmt::Display for LeafSlice<M, LEAF_CAP>
 where
     M: Measurable + std::fmt::Display,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         let mut iter = self.iter();
@@ -146,22 +135,18 @@ where
     }
 }
 
-impl<M> std::fmt::Debug for LeafSlice<M>
+impl<M, const LEAF_CAP: usize> std::fmt::Debug for LeafSlice<M, LEAF_CAP>
 where
     M: Measurable + std::fmt::Debug,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         LeafSlice::deref(self).fmt(f)
     }
 }
 
-impl<M> Deref for LeafSlice<M>
+impl<M, const LEAF_CAP: usize> Deref for LeafSlice<M, LEAF_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     type Target = [M];
 
@@ -170,22 +155,18 @@ where
     }
 }
 
-impl<M> AsRef<[M]> for LeafSlice<M>
+impl<M, const LEAF_CAP: usize> AsRef<[M]> for LeafSlice<M, LEAF_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn as_ref(&self) -> &[M] {
         self.0.as_slice()
     }
 }
 
-impl<M> Borrow<[M]> for LeafSlice<M>
+impl<M, const LEAF_CAP: usize> Borrow<[M]> for LeafSlice<M, LEAF_CAP>
 where
     M: Measurable,
-    [(); max_len::<M, M::Measure>()]: Sized,
-    [(); max_children::<M, M::Measure>()]: Sized,
 {
     fn borrow(&self) -> &[M] {
         self.0.as_slice()
@@ -202,47 +183,43 @@ mod inner {
     use smallvec::{Array, SmallVec};
 
     use super::Measurable;
-    use crate::tree::max_len;
+    use crate::DEFAULT_LEAF_CAP;
 
     /// The backing internal buffer type for [`LeafSlice`][super::LeafSlice].
     #[derive(Copy, Clone)]
-    struct BackingArray<M>([M; max_len::<M, M::Measure>()])
+    struct BackingArray<M, const LEAF_CAP: usize>([M; LEAF_CAP])
     where
-        M: Measurable,
-        [(); max_len::<M, M::Measure>()]: Sized;
+        M: Measurable;
 
     /// We need a very specific size of array, which is not necessarily
     /// supported directly by the impls in the smallvec crate.  We therefore
     /// have to implement this unsafe trait for our specific array size.
     /// TODO: once integer const generics land, and smallvec updates its APIs
     /// to use them, switch over and get rid of this unsafe impl.
-    unsafe impl<M> Array for BackingArray<M>
+    unsafe impl<M, const LEAF_CAP: usize> Array for BackingArray<M, LEAF_CAP>
     where
         M: Measurable,
-        [(); max_len::<M, M::Measure>()]: Sized,
     {
         type Item = M;
 
         fn size() -> usize {
-            max_len::<M, M::Measure>()
+            LEAF_CAP
         }
     }
 
     /// Internal small string for [`LeafSlice`][super::LeafSlice].
     #[derive(Clone, Default)]
     #[repr(C)]
-    pub struct LeafSmallVec<M>
+    pub struct LeafSmallVec<M, const LEAF_CAP: usize = DEFAULT_LEAF_CAP>
     where
         M: Measurable,
-        [(); max_len::<M, M::Measure>()]: Sized,
     {
-        buffer: SmallVec<BackingArray<M>>,
+        buffer: SmallVec<BackingArray<M, LEAF_CAP>>,
     }
 
-    impl<M> LeafSmallVec<M>
+    impl<M, const LEAF_CAP: usize> LeafSmallVec<M, LEAF_CAP>
     where
         M: Measurable,
-        [(); max_len::<M, M::Measure>()]: Sized,
     {
         #[inline(always)]
         pub fn with_capacity(capacity: usize) -> Self {
@@ -320,41 +297,46 @@ mod inner {
 
         #[test]
         fn vec_basics() {
-            let vec = LeafSmallVec::from_slice(&[Width(1), Width(2), Width(3), Width(0), Width(0)]);
-            assert_eq!(vec.as_slice(), &[
+            let vec = LeafSmallVec::<Width>::from_slice(&[
                 Width(1),
                 Width(2),
                 Width(3),
                 Width(0),
-                Width(0)
+                Width(0),
             ]);
+            assert_eq!(
+                vec.as_slice(),
+                &[Width(1), Width(2), Width(3), Width(0), Width(0)]
+            );
             assert_eq!(5, vec.len());
         }
 
         #[test]
         fn insert_slice_01() {
-            let mut vec = LeafSmallVec::from_slice(&[Width(1), Width(2)]);
+            let mut vec = LeafSmallVec::<Width>::from_slice(&[Width(1), Width(2)]);
             vec.insert_slice(2, &[Width(5), Width(0), Width(0)]);
-            assert_eq!(vec.as_slice(), &[
-                Width(1),
-                Width(2),
-                Width(5),
-                Width(0),
-                Width(0)
-            ]);
+            assert_eq!(
+                vec.as_slice(),
+                &[Width(1), Width(2), Width(5), Width(0), Width(0)]
+            );
         }
 
         #[test]
         #[should_panic]
         fn insert_slice_02() {
-            let mut vec = LeafSmallVec::from_slice(&[Width(2), Width(0)]);
+            let mut vec = LeafSmallVec::<Width>::from_slice(&[Width(2), Width(0)]);
             vec.insert_slice(3, &[Width(1)]);
         }
 
         #[test]
         fn remove_range_01() {
-            let mut vec =
-                LeafSmallVec::from_slice(&[Width(1), Width(2), Width(1), Width(0), Width(0)]);
+            let mut vec = LeafSmallVec::<Width>::from_slice(&[
+                Width(1),
+                Width(2),
+                Width(1),
+                Width(0),
+                Width(0),
+            ]);
             vec.remove_range(2, 3);
             assert_eq!(vec.as_slice(), &[Width(1), Width(2), Width(0), Width(0)]);
         }
@@ -362,20 +344,23 @@ mod inner {
         #[test]
         #[should_panic]
         fn remove_range_02() {
-            let mut vec = LeafSmallVec::from_slice(&[Width(5), Width(0), Width(0), Width(2)]);
+            let mut vec =
+                LeafSmallVec::<Width>::from_slice(&[Width(5), Width(0), Width(0), Width(2)]);
             vec.remove_range(4, 2);
         }
 
         #[test]
         #[should_panic]
         fn remove_range_03() {
-            let mut vec = LeafSmallVec::from_slice(&[Width(5), Width(0), Width(0), Width(2)]);
+            let mut vec =
+                LeafSmallVec::<Width>::from_slice(&[Width(5), Width(0), Width(0), Width(2)]);
             vec.remove_range(2, 7);
         }
 
         #[test]
         fn truncate_01() {
-            let mut vec = LeafSmallVec::from_slice(&[Width(3), Width(0), Width(0), Width(4)]);
+            let mut vec =
+                LeafSmallVec::<Width>::from_slice(&[Width(3), Width(0), Width(0), Width(4)]);
             vec.truncate(3);
             assert_eq!(vec.as_slice(), &[Width(3), Width(0), Width(0)]);
         }
@@ -383,13 +368,14 @@ mod inner {
         #[test]
         #[should_panic]
         fn truncate_02() {
-            let mut vec = LeafSmallVec::from_slice(&[Width(6)]);
+            let mut vec = LeafSmallVec::<Width>::from_slice(&[Width(6)]);
             vec.truncate(7);
         }
 
         #[test]
         fn split_off_01() {
-            let mut vec_1 = LeafSmallVec::from_slice(&[Width(1), Width(3), Width(0), Width(0)]);
+            let mut vec_1 =
+                LeafSmallVec::<Width>::from_slice(&[Width(1), Width(3), Width(0), Width(0)]);
             let vec_2 = vec_1.split_off(2);
             assert_eq!(vec_1.as_slice(), &[Width(1), Width(3)]);
             assert_eq!(vec_2.as_slice(), &[Width(0), Width(0)]);
@@ -398,8 +384,13 @@ mod inner {
         #[test]
         #[should_panic]
         fn split_off_02() {
-            let mut s1 =
-                LeafSmallVec::from_slice(&[Width(1), Width(2), Width(3), Width(0), Width(0)]);
+            let mut s1 = LeafSmallVec::<Width>::from_slice(&[
+                Width(1),
+                Width(2),
+                Width(3),
+                Width(0),
+                Width(0),
+            ]);
             s1.split_off(7);
         }
     }

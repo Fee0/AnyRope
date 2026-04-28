@@ -47,7 +47,7 @@ let my_str = "This word will be red!";
 // - Change the color to red;
 // - Skip 4 characters;
 // - Change the rendering back to normal.
-let mut tags = any_rope::Rope::from_slice(&[Skip(5), PrintRed, Skip(4), Normal]);
+let mut tags = any_rope::Rope::<Tag>::from_slice(&[Skip(5), PrintRed, Skip(4), Normal]);
 // Do note that Tag::Skip only represents characters because we are also iterating
 // over a `Chars` iterator, and have chosen to do so.
 
@@ -105,6 +105,10 @@ it to be, allowing for great flexibility in how AnyRope could be useful.
 AnyRope has rope slices that allow you to work with just parts of a rope, using
 all the read-only operations of a full rope including iterators and making
 sub-slices.
+
+### User-defined capacities
+
+AnyRope uses stable const generics for its internal leaf and branch capacities. The defaults are suitable for common use, and callers that need different tradeoffs can spell them explicitly, for example `Rope<MyItem, 128, 48>`.
 
 ### Flexible APIs with low-level access
 

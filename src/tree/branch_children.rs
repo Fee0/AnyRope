@@ -593,7 +593,7 @@ mod inner {
         /// An array of the child node [`SliceInfo`]s
         /// INVARIANT: The nodes from 0..len must be initialized
         info: [MaybeUninit<SliceInfo<M::Measure>>; BRANCH_CAP],
-        len: u8,
+        len: usize,
     }
 
     impl<M, const LEAF_CAP: usize, const BRANCH_CAP: usize>
@@ -616,7 +616,7 @@ mod inner {
         /// Current length of the array.
         #[inline(always)]
         pub fn len(&self) -> usize {
-            self.len as usize
+            self.len
         }
 
         /// Access to the nodes array.
@@ -632,7 +632,7 @@ mod inner {
         pub fn nodes_mut(&mut self) -> &mut [Arc<Node<M, LEAF_CAP, BRANCH_CAP>>] {
             // SAFETY: MaybeUninit<T> is layout compatible with T, and
             // the nodes from 0..len are guaranteed to be initialized
-            unsafe { mem::transmute(&mut self.nodes[..(self.len as usize)]) }
+            unsafe { mem::transmute(&mut self.nodes[..self.len]) }
         }
 
         /// Access to the info array.
@@ -648,7 +648,7 @@ mod inner {
         pub fn info_mut(&mut self) -> &mut [SliceInfo<M::Measure>] {
             // SAFETY: MaybeUninit<T> is layout compatible with T, and
             // the info from 0..len are guaranteed to be initialized
-            unsafe { mem::transmute(&mut self.info[..(self.len as usize)]) }
+            unsafe { mem::transmute(&mut self.info[..self.len]) }
         }
 
         /// Mutable access to both the info and nodes arrays simultaneously.
@@ -662,8 +662,8 @@ mod inner {
             // SAFETY: MaybeUninit<T> is layout compatible with T, and
             // the info from 0..len are guaranteed to be initialized
             (
-                unsafe { mem::transmute(&mut self.info[..(self.len as usize)]) },
-                unsafe { mem::transmute(&mut self.nodes[..(self.len as usize)]) },
+                unsafe { mem::transmute(&mut self.info[..self.len]) },
+                unsafe { mem::transmute(&mut self.nodes[..self.len]) },
             )
         }
 
@@ -674,7 +674,7 @@ mod inner {
         pub fn push(&mut self, item: (SliceInfo<M::Measure>, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>)) {
             assert!(self.len() < BRANCH_CAP);
             self.info[self.len()] = MaybeUninit::new(item.0);
-            self.nodes[self.len as usize] = MaybeUninit::new(item.1);
+            self.nodes[self.len] = MaybeUninit::new(item.1);
             // We have just initialized both info and node and 0..=len, so we can increase
             // it
             self.len += 1;
@@ -773,7 +773,7 @@ mod inner {
             // The `.nodes` array contains `MaybeUninit` wrappers, which need
             // to be manually dropped if valid. We drop only the valid ones
             // here.
-            for node in &mut self.nodes[..self.len as usize] {
+            for node in &mut self.nodes[..self.len] {
                 unsafe { ptr::drop_in_place(node.as_mut_ptr()) };
             }
         }

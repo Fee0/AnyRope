@@ -1829,6 +1829,18 @@ mod tests {
     }
 
     #[test]
+    fn large_branch_capacity_above_u8_max() {
+        let data = vec![Width(1); 1100];
+        let rope = Rope::<Width, 4, 300>::from_slice(&data);
+
+        assert_eq!(rope.len(), data.len());
+        assert_eq!(rope.measure(), data.len());
+        assert_eq!(rope, data.as_slice());
+        rope.assert_integrity();
+        rope.assert_invariants();
+    }
+
+    #[test]
     fn len_01() {
         let rope = Rope::<Width, 9, 5>::from(pseudo_random());
         assert_eq!(rope.len(), 70);

@@ -1123,14 +1123,27 @@ where
             self.root = Arc::new(Node::new());
             Ok(())
         } else {
+            // An inclusive removal also takes the element `start` falls inside, so the halves
+            // join where that element began, which may lie past the end of what is left.
+            let seam = if inclusive {
+                self.get_from_measure(start, cmp)
+                    .map_or(start, |(offset, _)| offset)
+            } else {
+                start
+            };
             let root = Arc::make_mut(&mut self.root);
 
             let (_, needs_fix) = root.remove_range(start, end, &cmp, inclusive, inclusive);
 
             if needs_fix {
-                root.fix_tree_seam(start, &cmp);
+                root.fix_tree_seam(seam, &cmp);
             }
 
+            // A removal that empties the rope can leave empty branches behind, which later
+            // searches cannot descend into.
+            if self.root.len() == 0 {
+                self.root = Arc::new(Node::new());
+            }
             self.pull_up_singular_nodes();
             Ok(())
         }

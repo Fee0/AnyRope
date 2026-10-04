@@ -332,7 +332,7 @@ where
     /// Creates an iterator over the array's items.
     pub fn iter(
         &self,
-    ) -> Zip<slice::Iter<SliceInfo<M::Measure>>, slice::Iter<Arc<Node<M, LEAF_CAP, BRANCH_CAP>>>>
+    ) -> Zip<slice::Iter<'_, SliceInfo<M::Measure>>, slice::Iter<'_, Arc<Node<M, LEAF_CAP, BRANCH_CAP>>>>
     {
         Iterator::zip(self.info().iter(), self.nodes().iter())
     }

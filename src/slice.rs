@@ -86,7 +86,14 @@ where
                 // simpler lightweight slice then.
                 Node::Leaf(ref slice, _) => {
                     let start = start_measure_to_index(slice, n_start, cmp);
-                    let end = start + end_measure_to_index(&slice[start..], n_end - n_start, cmp);
+                    // `slice[start..]` begins where its first element does, at or before `n_start`.
+                    // An empty range overlaps nothing but the zero-width elements at its start.
+                    let rest_end = if cmp(&n_end, &n_start).is_eq() {
+                        M::Measure::default()
+                    } else {
+                        n_end - index_to_measure(slice, start)
+                    };
+                    let end = start + end_measure_to_index(&slice[start..], rest_end, cmp);
                     return RopeSlice(RSEnum::Light {
                         slice: &slice[start..end],
                     });
@@ -1858,5 +1865,61 @@ mod tests {
         }
 
         assert_eq!(slice, cow);
+    }
+
+    /// Every element overlapping `start..end`, by brute force.
+    fn overlapping(widths: &[Width], start: usize, end: usize) -> Vec<Width> {
+        let mut offset = 0;
+        let mut found = Vec::new();
+        for width in widths {
+            if offset < end && offset + width.0 > start {
+                found.push(*width);
+            }
+            offset += width.0;
+        }
+        found
+    }
+
+    fn assert_every_slice_holds_its_overlapping_elements<
+        const LEAF_CAP: usize,
+        const BRANCH_CAP: usize,
+    >(
+        widths: &[Width],
+    ) {
+        let rope = Rope::<Width, LEAF_CAP, BRANCH_CAP>::from_slice(widths);
+        let total = rope.measure();
+        for start in 0..total {
+            for end in start + 1..=total {
+                let slice = rope.measure_slice(start..end, usize::cmp);
+                let found: Vec<Width> = slice.iter().map(|(_, width)| width).collect();
+                assert_eq!(
+                    found,
+                    overlapping(widths, start, end),
+                    "{start}..{end} with caps {LEAF_CAP}/{BRANCH_CAP}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn slice_ending_past_its_first_element_keeps_the_rest() {
+        let widths = [Width(8), Width(4), Width(24)];
+        let rope = Rope::<Width>::from_slice(&widths);
+        let found: Vec<Width> = rope
+            .measure_slice(7..15, usize::cmp)
+            .iter()
+            .map(|(_, width)| width)
+            .collect();
+
+        assert_eq!(found, widths);
+    }
+
+    #[test]
+    fn every_slice_holds_its_overlapping_elements() {
+        let widths: Vec<Width> = (0..40).map(|num| Width(1 + num * 7 % 5)).collect();
+
+        assert_every_slice_holds_its_overlapping_elements::<4, 4>(&widths);
+        assert_every_slice_holds_its_overlapping_elements::<9, 5>(&widths);
+        assert_every_slice_holds_its_overlapping_elements::<64, 16>(&widths);
     }
 }

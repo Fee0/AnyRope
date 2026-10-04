@@ -515,13 +515,6 @@ where
         }
     }
 
-    pub fn leaf_slice_mut(&mut self) -> &mut LeafSlice<M, LEAF_CAP> {
-        match *self {
-            Node::Leaf(ref mut slice, _) => slice,
-            _ => panic!(),
-        }
-    }
-
     pub fn is_leaf(&self) -> bool {
         match *self {
             Node::Leaf(_, _) => true,

@@ -452,7 +452,7 @@ where
         at_index: usize,
         (start_index, end_index): (usize, usize),
         measure_range: (M::Measure, M::Measure),
-    ) -> (Chunks<M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure) {
+    ) -> (Chunks<'_, M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure) {
         debug_assert!(at_index >= start_index);
         debug_assert!(at_index <= end_index);
 

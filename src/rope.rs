@@ -791,7 +791,7 @@ where
         &self,
         measure_range: impl MeasureRange<M>,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> RopeSlice<M, LEAF_CAP, BRANCH_CAP> {
+    ) -> RopeSlice<'_, M, LEAF_CAP, BRANCH_CAP> {
         self.get_measure_slice(measure_range, cmp).unwrap()
     }
 
@@ -810,7 +810,7 @@ where
     pub fn index_slice(
         &self,
         index_range: impl RangeBounds<usize>,
-    ) -> RopeSlice<M, LEAF_CAP, BRANCH_CAP> {
+    ) -> RopeSlice<'_, M, LEAF_CAP, BRANCH_CAP> {
         match self.get_index_slice_impl(index_range) {
             Ok(s) => return s,
             Err(e) => panic!("index_slice(): {}", e),
@@ -827,7 +827,7 @@ where
     ///
     /// Runs in O(log N) time.
     #[inline]
-    pub fn iter(&self) -> Iter<M, LEAF_CAP, BRANCH_CAP> {
+    pub fn iter(&self) -> Iter<'_, M, LEAF_CAP, BRANCH_CAP> {
         Iter::<M, LEAF_CAP, BRANCH_CAP>::new(&self.root)
     }
 
@@ -854,7 +854,7 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Iter<M, LEAF_CAP, BRANCH_CAP> {
+    ) -> Iter<'_, M, LEAF_CAP, BRANCH_CAP> {
         if let Some(out) = self.get_iter_at_measure(measure, cmp) {
             out
         } else {
@@ -870,7 +870,7 @@ where
     ///
     /// Runs in O(log N) time.
     #[inline]
-    pub fn chunks(&self) -> Chunks<M, LEAF_CAP, BRANCH_CAP> {
+    pub fn chunks(&self) -> Chunks<'_, M, LEAF_CAP, BRANCH_CAP> {
         Chunks::<M, LEAF_CAP, BRANCH_CAP>::new(&self.root)
     }
 
@@ -896,7 +896,7 @@ where
     pub fn chunks_at_index(
         &self,
         index: usize,
-    ) -> (Chunks<M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure) {
+    ) -> (Chunks<'_, M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure) {
         if let Some(out) = self.get_chunks_at_index(index) {
             out
         } else {
@@ -932,7 +932,7 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> (Chunks<M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure) {
+    ) -> (Chunks<'_, M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure) {
         if let Some(out) = self.get_chunks_at_measure(measure, &cmp) {
             out
         } else {
@@ -1287,7 +1287,7 @@ where
         &self,
         range: impl MeasureRange<M>,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Result<RopeSlice<M, LEAF_CAP, BRANCH_CAP>, M> {
+    ) -> Result<RopeSlice<'_, M, LEAF_CAP, BRANCH_CAP>, M> {
         let (start, end) = measures_from_range(&range, self.measure())?;
 
         // Bounds check
@@ -1299,14 +1299,14 @@ where
     pub fn get_index_slice(
         &self,
         index_range: impl RangeBounds<usize>,
-    ) -> Option<RopeSlice<M, LEAF_CAP, BRANCH_CAP>> {
+    ) -> Option<RopeSlice<'_, M, LEAF_CAP, BRANCH_CAP>> {
         self.get_index_slice_impl(index_range).ok()
     }
 
     pub(crate) fn get_index_slice_impl(
         &self,
         index_range: impl RangeBounds<usize>,
-    ) -> Result<RopeSlice<M, LEAF_CAP, BRANCH_CAP>, M> {
+    ) -> Result<RopeSlice<'_, M, LEAF_CAP, BRANCH_CAP>, M> {
         let start_range = start_bound_to_num(index_range.start_bound());
         let end_range = end_bound_to_num(index_range.end_bound());
 
@@ -1354,7 +1354,7 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Option<Iter<M, LEAF_CAP, BRANCH_CAP>> {
+    ) -> Option<Iter<'_, M, LEAF_CAP, BRANCH_CAP>> {
         // Bounds check
         if cmp(&measure, &self.measure()).is_le() {
             Some(Iter::<M, LEAF_CAP, BRANCH_CAP>::new_with_range_at_measure(
@@ -1374,7 +1374,7 @@ where
     pub fn get_chunks_at_index(
         &self,
         index: usize,
-    ) -> Option<(Chunks<M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure)> {
+    ) -> Option<(Chunks<'_, M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure)> {
         // Bounds check
         if index <= self.len() {
             Some(Chunks::<M, LEAF_CAP, BRANCH_CAP>::new_with_range_at_index(
@@ -1395,7 +1395,7 @@ where
         &self,
         measure: M::Measure,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
-    ) -> Option<(Chunks<M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure)> {
+    ) -> Option<(Chunks<'_, M, LEAF_CAP, BRANCH_CAP>, usize, M::Measure)> {
         // Bounds check
         if cmp(&measure, &self.measure()).is_le() {
             Some(

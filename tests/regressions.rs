@@ -294,3 +294,88 @@ fn measure_to_index_matches_model_with_zero_measure_elements() {
         check_measure_to_index::<96, 32>(&model);
     }
 }
+
+mod pair {
+    use std::{
+        cmp::Ordering,
+        ops::{Add, Sub},
+    };
+
+    use any_rope::{FallibleOrd, Measurable};
+
+    /// A measure whose components can be ordered differently, which
+    /// `fallible_cmp` treats as a bug.
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+    pub struct Pair(pub usize, pub usize);
+
+    impl Add for Pair {
+        type Output = Self;
+
+        fn add(self, other: Self) -> Self {
+            Self(self.0 + other.0, self.1 + other.1)
+        }
+    }
+
+    impl Sub for Pair {
+        type Output = Self;
+
+        fn sub(self, other: Self) -> Self {
+            Self(self.0 - other.0, self.1 - other.1)
+        }
+    }
+
+    impl FallibleOrd for Pair {
+        fn fallible_cmp(&self, other: &Self) -> Ordering {
+            match (self.0.cmp(&other.0), self.1.cmp(&other.1)) {
+                (Ordering::Less, Ordering::Greater) | (Ordering::Greater, Ordering::Less) => {
+                    unreachable!("ambiguous comparison between {self:?} and {other:?}")
+                }
+                (Ordering::Equal, ordering) | (ordering, _) => ordering,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct Item(pub Pair);
+
+    impl Measurable for Item {
+        type Measure = Pair;
+
+        fn measure(&self) -> Pair {
+            self.0
+        }
+    }
+
+    pub fn first_cmp(lhs: &Pair, rhs: &Pair) -> Ordering {
+        lhs.0.cmp(&rhs.0)
+    }
+}
+
+#[test]
+fn measure_ranges_are_validated_with_the_given_comparator() {
+    use pair::{Item, Pair, first_cmp};
+
+    let mut rope = Rope::<Item>::from_slice(&[Item(Pair(1, 5)); 3]);
+
+    // In bounds by the first component, though not by the second.
+    let slice = rope.get_measure_slice(Pair(0, 0)..Pair(2, 99), first_cmp).unwrap();
+    assert_eq!(slice.len(), 2);
+
+    let range = Pair(0, 0)..Pair(4, 0);
+    assert!(rope.get_measure_slice(range.clone(), first_cmp).is_err());
+    assert!(rope.try_remove_inclusive(range.clone(), first_cmp).is_err());
+    assert!(rope.try_remove_exclusive(range.clone(), first_cmp).is_err());
+    assert!(rope.measure_slice(.., first_cmp).get_measure_slice(range, first_cmp).is_none());
+
+    rope.remove_inclusive(Pair(0, 0)..Pair(1, 99), first_cmp);
+    assert_eq!(rope.len(), 2);
+}
+
+#[test]
+fn slice_get_measure_slice_out_of_bounds_returns_none() {
+    let rope = Rope::<Width, 4, 4>::from_slice(&widths(&[1; 20]));
+    let slice = rope.measure_slice(2..18, usize::cmp);
+    assert!(slice.get_measure_slice(0..17, usize::cmp).is_none());
+    assert!(slice.get_measure_slice(17.., usize::cmp).is_none());
+    assert!(slice.get_measure_slice(..17, usize::cmp).is_none());
+}

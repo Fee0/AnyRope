@@ -526,6 +526,7 @@ impl<M: Measurable> MeasureRange<M> for RangeFull {
 fn measures_from_range<M: Measurable>(
     range: &impl MeasureRange<M>,
     limit: M::Measure,
+    cmp: &impl Fn(&M::Measure, &M::Measure) -> Ordering,
 ) -> Result<(M::Measure, M::Measure), M> {
     #[cfg(debug_assertions)]
     {
@@ -540,14 +541,14 @@ fn measures_from_range<M: Measurable>(
     match (range.start_bound(), range.end_bound()) {
         (None, None) => Ok((M::Measure::default(), limit)),
         (None, Some(end)) => {
-            if end.fallible_cmp(&limit).is_gt() {
+            if cmp(end, &limit).is_gt() {
                 Err(Error::MeasureRangeOutOfBounds(None, Some(*end), limit))
             } else {
                 Ok((M::Measure::default(), *end))
             }
         }
         (Some(start), None) => {
-            if start.fallible_cmp(&limit).is_gt() {
+            if cmp(start, &limit).is_gt() {
                 Err(Error::MeasureRangeOutOfBounds(Some(*start), None, limit))
             } else {
                 Ok((*start, limit))
@@ -555,9 +556,9 @@ fn measures_from_range<M: Measurable>(
         }
 
         (Some(start), Some(end)) => {
-            if start.fallible_cmp(end).is_gt() {
+            if cmp(start, end).is_gt() {
                 Err(Error::MeasureRangeInvalid(Some(*start), Some(*end)))
-            } else if end.fallible_cmp(&limit).is_gt() || start.fallible_cmp(&limit).is_gt() {
+            } else if cmp(end, &limit).is_gt() || cmp(start, &limit).is_gt() {
                 Err(Error::MeasureRangeOutOfBounds(
                     Some(*start),
                     Some(*end),

@@ -448,7 +448,7 @@ where
         range: impl MeasureRange<M>,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
     ) -> Self {
-        let (start, end) = measures_from_range(&range, self.measure()).unwrap();
+        let (start, end) = measures_from_range(&range, self.measure(), &cmp).unwrap();
 
         if cmp(&start, &M::Measure::default()).is_eq() && cmp(&end, &self.measure()).is_eq() {
             return self.clone();
@@ -840,7 +840,7 @@ where
         range: impl MeasureRange<M>,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
     ) -> Option<RopeSlice<'a, M, LEAF_CAP, BRANCH_CAP>> {
-        let (start, end) = measures_from_range(&range, self.measure()).unwrap();
+        let (start, end) = measures_from_range(&range, self.measure(), &cmp).ok()?;
 
         if cmp(&start, &M::Measure::default()).is_eq() && cmp(&end, &self.measure()).is_eq() {
             return Some(self.clone());

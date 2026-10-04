@@ -1121,7 +1121,7 @@ where
         cmp: &impl Fn(&M::Measure, &M::Measure) -> Ordering,
         inclusive: bool,
     ) -> Result<(), M> {
-        let (start, end) = measures_from_range(&range, self.measure())?;
+        let (start, end) = measures_from_range(&range, self.measure(), cmp)?;
 
         if cmp(&start, &M::Measure::default()).is_eq()
             && cmp(&end, &self.measure()).is_eq()
@@ -1308,7 +1308,7 @@ where
         range: impl MeasureRange<M>,
         cmp: impl Fn(&M::Measure, &M::Measure) -> Ordering,
     ) -> Result<RopeSlice<'_, M, LEAF_CAP, BRANCH_CAP>, M> {
-        let (start, end) = measures_from_range(&range, self.measure())?;
+        let (start, end) = measures_from_range(&range, self.measure(), &cmp)?;
 
         // Bounds check
         Ok(RopeSlice::new_with_range(&self.root, start, end, &cmp))

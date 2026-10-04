@@ -683,8 +683,19 @@ where
     ) -> Result<usize, M> {
         // Bounds check
         if cmp(&measure, &self.measure()).is_le() {
-            let (chunk, b, c) = self.chunk_at_measure(measure, &cmp);
-            Ok(b + start_measure_to_index(chunk, measure - c, cmp))
+            match *self {
+                RopeSlice(RSEnum::Full {
+                    node,
+                    start_info,
+                    end_info,
+                }) => {
+                    let info = node.start_measure_to_slice_info(start_info.measure + measure, &cmp);
+                    Ok(clamped_index(info.len, start_info, end_info))
+                }
+                RopeSlice(RSEnum::Light { slice }) => {
+                    Ok(start_measure_to_index(slice, measure, cmp))
+                }
+            }
         } else {
             Err(Error::MeasureOutOfBounds(measure, self.measure()))
         }
@@ -700,8 +711,17 @@ where
     ) -> Result<usize, M> {
         // Bounds check
         if cmp(&measure, &self.measure()).is_le() {
-            let (chunk, b, c) = self.chunk_at_measure(measure, &cmp);
-            Ok(b + end_measure_to_index(chunk, measure - c, cmp))
+            match *self {
+                RopeSlice(RSEnum::Full {
+                    node,
+                    start_info,
+                    end_info,
+                }) => {
+                    let info = node.end_measure_to_slice_info(start_info.measure + measure, &cmp);
+                    Ok(clamped_index(info.len, start_info, end_info))
+                }
+                RopeSlice(RSEnum::Light { slice }) => Ok(end_measure_to_index(slice, measure, cmp)),
+            }
         } else {
             Err(Error::MeasureOutOfBounds(measure, self.measure()))
         }
@@ -1401,6 +1421,22 @@ where
     ) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
+}
+
+//===========================================================
+// Utilities.
+
+/// Converts an index within a slice's node into an index within the slice,
+/// clamping it to the slice's bounds.
+///
+/// Searches in the node may land on zero-measure elements just outside of the
+/// slice, which the clamping excludes.
+#[inline]
+fn clamped_index<T>(node_index: Count, start_info: SliceInfo<T>, end_info: SliceInfo<T>) -> usize
+where
+    T: std::fmt::Debug + Copy + PartialEq + std::ops::Add<Output = T> + std::ops::Sub<Output = T>,
+{
+    (node_index.clamp(start_info.len, end_info.len) - start_info.len) as usize
 }
 
 //===========================================================

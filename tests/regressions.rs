@@ -181,3 +181,116 @@ fn index_slice_bounds_at_usize_max_are_out_of_bounds() {
     assert!(slice.get_index_slice(..=usize::MAX).is_none());
     assert!(slice.get_index_slice((Excluded(usize::MAX), Unbounded)).is_none());
 }
+
+/// Reference for `start_measure_to_index`: the first element ending after
+/// `measure`, or a zero-measure element starting at it.
+fn model_start_measure_to_index(model: &[Width], measure: usize) -> usize {
+    let mut offset = 0;
+    for (index, width) in model.iter().enumerate() {
+        if offset + width.0 > measure || (width.0 == 0 && offset == measure) {
+            return index;
+        }
+        offset += width.0;
+    }
+    model.len()
+}
+
+/// Reference for `end_measure_to_index`: the first element starting after
+/// `measure`, or a non-zero-measure element starting at it.
+fn model_end_measure_to_index(model: &[Width], measure: usize) -> usize {
+    let mut offset = 0;
+    for (index, width) in model.iter().enumerate() {
+        if offset > measure || (width.0 != 0 && offset == measure) {
+            return index;
+        }
+        offset += width.0;
+    }
+    model.len()
+}
+
+/// Zero-heavy contents, so that runs of zero-measure elements end up on leaf
+/// boundaries.
+fn zero_heavy(len: usize, seed: u64) -> Vec<Width> {
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+    let mut rng = StdRng::seed_from_u64(seed);
+    (0..len)
+        .map(|_| Width(if rng.gen_bool(0.4) { 0 } else { rng.gen_range(1..=3) }))
+        .collect()
+}
+
+#[test]
+fn measure_to_index_at_the_end_and_on_empty_ropes() {
+    let rope = Rope::<Width>::new();
+    assert_eq!(rope.try_start_measure_to_index(0, usize::cmp).ok(), Some(0));
+    assert_eq!(rope.try_end_measure_to_index(0, usize::cmp).ok(), Some(0));
+
+    let rope = Rope::<Width>::from_slice(&widths(&[1, 2]));
+    assert_eq!(rope.try_start_measure_to_index(3, usize::cmp).ok(), Some(2));
+    assert_eq!(rope.try_end_measure_to_index(3, usize::cmp).ok(), Some(2));
+    assert!(rope.try_start_measure_to_index(4, usize::cmp).is_err());
+    assert!(rope.try_end_measure_to_index(4, usize::cmp).is_err());
+
+    let rope = Rope::<Width>::from_slice(&widths(&[1, 0]));
+    assert_eq!(rope.start_measure_to_index(1, usize::cmp), 1);
+    assert_eq!(rope.end_measure_to_index(1, usize::cmp), 2);
+
+    let rope = Rope::<Width>::from_slice(&widths(&[0, 0]));
+    assert_eq!(rope.start_measure_to_index(0, usize::cmp), 0);
+    assert_eq!(rope.end_measure_to_index(0, usize::cmp), 2);
+
+    let rope = Rope::<Width, 4, 4>::from_slice(&widths(&[1; 20]));
+    let slice = rope.index_slice(3..11);
+    assert_eq!(slice.try_start_measure_to_index(8, usize::cmp).ok(), Some(8));
+    assert_eq!(slice.try_end_measure_to_index(8, usize::cmp).ok(), Some(8));
+    let empty = rope.index_slice(5..5);
+    assert_eq!(empty.try_start_measure_to_index(0, usize::cmp).ok(), Some(0));
+    assert_eq!(empty.try_end_measure_to_index(0, usize::cmp).ok(), Some(0));
+}
+
+fn check_measure_to_index<const LEAF_CAP: usize, const BRANCH_CAP: usize>(model: &[Width]) {
+    let rope = Rope::<Width, LEAF_CAP, BRANCH_CAP>::from_slice(model);
+    let total = rope.measure();
+    for measure in 0..=total {
+        assert_eq!(
+            rope.start_measure_to_index(measure, usize::cmp),
+            model_start_measure_to_index(model, measure),
+            "start, measure {measure}"
+        );
+        assert_eq!(
+            rope.end_measure_to_index(measure, usize::cmp),
+            model_end_measure_to_index(model, measure),
+            "end, measure {measure}"
+        );
+    }
+
+    let len = model.len();
+    let mut bounds: Vec<(usize, usize)> = (0..len).step_by(3).map(|start| (start, len)).collect();
+    bounds.extend((0..len).step_by(4).map(|start| (start, (start + 7).min(len))));
+    for (start, end) in bounds {
+        let slice = rope.index_slice(start..end);
+        let sub_model = &model[start..end];
+        for measure in 0..=slice.measure() {
+            assert_eq!(
+                slice.start_measure_to_index(measure, usize::cmp),
+                model_start_measure_to_index(sub_model, measure),
+                "slice {start}..{end}, start, measure {measure}"
+            );
+            assert_eq!(
+                slice.end_measure_to_index(measure, usize::cmp),
+                model_end_measure_to_index(sub_model, measure),
+                "slice {start}..{end}, end, measure {measure}"
+            );
+        }
+    }
+}
+
+#[test]
+fn measure_to_index_matches_model_with_zero_measure_elements() {
+    for seed in 0..20 {
+        let model = zero_heavy(60, seed);
+        check_measure_to_index::<4, 4>(&model);
+        check_measure_to_index::<5, 4>(&model);
+        check_measure_to_index::<7, 6>(&model);
+        check_measure_to_index::<96, 32>(&model);
+    }
+}

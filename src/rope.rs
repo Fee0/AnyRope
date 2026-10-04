@@ -1214,8 +1214,7 @@ where
     ) -> Result<usize, M> {
         // Bounds check
         if cmp(&measure, &self.measure()).is_le() {
-            let (chunk, b, c) = self.chunk_at_measure(measure, &cmp);
-            Ok(b + start_measure_to_index(chunk, measure - c, cmp))
+            Ok(self.root.start_measure_to_slice_info(measure, &cmp).len as usize)
         } else {
             Err(Error::MeasureOutOfBounds(measure, self.measure()))
         }
@@ -1231,8 +1230,9 @@ where
     ) -> Result<usize, M> {
         // Bounds check
         if cmp(&measure, &self.measure()).is_le() {
-            let (chunk, b, c) = self.chunk_at_measure(measure, &cmp);
-            Ok(b + end_measure_to_index(chunk, measure - c, cmp))
+            // Unlike `chunk_at_measure`, this also handles `measure == self.measure()`,
+            // and counts zero-measure elements at the start of the next chunk.
+            Ok(self.root.end_measure_to_slice_info(measure, &cmp).len as usize)
         } else {
             Err(Error::MeasureOutOfBounds(measure, self.measure()))
         }

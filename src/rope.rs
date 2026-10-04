@@ -551,7 +551,11 @@ where
     /// Runs in O(log N) time.
     #[inline]
     pub fn append(&mut self, other: Self) {
-        if other.measure().fallible_cmp(&M::Measure::default()).is_gt() {
+        // Emptiness is decided by length, not measure, since a non-empty rope
+        // may consist solely of elements with a measure of 0.
+        if self.is_empty() {
+            *self = other;
+        } else if !other.is_empty() {
             let left_info = self.root.info();
             let right_info = other.root.info();
 

@@ -36,3 +36,34 @@ fn insert_slice_terminates_with_minimum_leaf_cap() {
 
     assert_eq!(inserted, widths(&[1, 3, 4, 5, 6, 7, 8, 9, 2]));
 }
+
+#[test]
+fn append_keeps_ropes_with_zero_measure() {
+    let mut rope = Rope::<Width, 4, 4>::from_slice(&widths(&[1]));
+    rope.append(Rope::from_slice(&widths(&[0, 0])));
+    assert_eq!(contents(&rope), widths(&[1, 0, 0]));
+
+    let mut rope = Rope::<Width, 4, 4>::new();
+    rope.append(Rope::from_slice(&widths(&[0, 0])));
+    assert_eq!(contents(&rope), widths(&[0, 0]));
+
+    let mut rope = Rope::<Width, 4, 4>::from_slice(&widths(&[0, 0, 0]));
+    rope.append(Rope::from_slice(&widths(&[0; 20])));
+    rope.assert_integrity();
+    rope.assert_invariants();
+    assert_eq!(contents(&rope), widths(&[0; 23]));
+
+    let mut rope = Rope::<Width, 4, 4>::from_slice(&widths(&[0; 20]));
+    rope.append(Rope::new());
+    assert_eq!(contents(&rope), widths(&[0; 20]));
+}
+
+#[test]
+fn large_insert_slice_keeps_zero_measure_elements() {
+    // Slices longer than `LEAF_CAP * 6` are spliced in through `append`.
+    let mut rope = Rope::<Width, 4, 4>::from_slice(&widths(&[1]));
+    rope.insert_slice(1, &widths(&[0; 30]), usize::cmp);
+    rope.assert_integrity();
+    rope.assert_invariants();
+    assert_eq!(rope.len(), 31);
+}

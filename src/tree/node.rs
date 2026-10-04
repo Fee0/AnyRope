@@ -578,7 +578,8 @@ where
     }
 
     /// Checks that all internal nodes have the minimum number of
-    /// children and all non-root leaf nodes are non-empty.
+    /// children, all non-root leaf nodes are non-empty, and no leaf
+    /// node exceeds `LEAF_CAP`.
     pub fn assert_node_size(&self, is_root: bool) {
         match *self {
             Node::Leaf(ref slice, _) => {
@@ -586,6 +587,7 @@ where
                 if !is_root {
                     assert!(slice.len() > 0);
                 }
+                assert!(slice.len() <= LEAF_CAP);
             }
             Node::Branch(ref children) => {
                 // Child count

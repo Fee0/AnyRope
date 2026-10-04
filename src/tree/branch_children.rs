@@ -120,7 +120,7 @@ where
             match *node1 {
                 Node::Leaf(ref mut slice1, ref mut info1) => {
                     if let Node::Leaf(ref mut slice2, ref mut info2) = *node2 {
-                        if (slice1.len() + slice2.len()) <= BRANCH_CAP {
+                        if (slice1.len() + slice2.len()) <= LEAF_CAP {
                             slice1.push_slice(slice2);
                             *info1 = SliceInfo::<M::Measure>::from_slice(slice1);
                             true

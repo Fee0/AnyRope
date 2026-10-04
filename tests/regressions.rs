@@ -67,3 +67,24 @@ fn large_insert_slice_keeps_zero_measure_elements() {
     rope.assert_invariants();
     assert_eq!(rope.len(), 31);
 }
+
+#[test]
+fn leaves_respect_leaf_cap_when_it_differs_from_branch_cap() {
+    let mut builder = any_rope::RopeBuilder::<Width, 4, 32>::new();
+    for width in widths(&[1, 2, 3, 4, 5]) {
+        builder.append(width);
+    }
+    let rope = builder.finish();
+    rope.assert_integrity();
+    rope.assert_invariants();
+    assert!(rope.chunks().all(|chunk| chunk.len() <= 4));
+    assert_eq!(contents(&rope), widths(&[1, 2, 3, 4, 5]));
+
+    // Undersized leaves must still merge when `LEAF_CAP > BRANCH_CAP`.
+    let mut rope = Rope::<Width, 8, 4>::from_slice(&widths(&[1; 40]));
+    rope.remove_inclusive(3..37, usize::cmp);
+    rope.assert_integrity();
+    rope.assert_invariants();
+    assert!(rope.chunks().all(|chunk| chunk.len() <= 8));
+    assert_eq!(contents(&rope), widths(&[1; 6]));
+}

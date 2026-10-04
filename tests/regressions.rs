@@ -168,3 +168,16 @@ fn nested_measure_slice_is_relative_to_the_outer_slice() {
         }
     }
 }
+
+#[test]
+fn index_slice_bounds_at_usize_max_are_out_of_bounds() {
+    use std::ops::Bound::{Excluded, Unbounded};
+
+    let rope = Rope::<Width, 4, 4>::from_slice(&widths(&[1; 20]));
+    assert!(rope.get_index_slice(..=usize::MAX).is_none());
+    assert!(rope.get_index_slice((Excluded(usize::MAX), Unbounded)).is_none());
+
+    let slice = rope.index_slice(2..18);
+    assert!(slice.get_index_slice(..=usize::MAX).is_none());
+    assert!(slice.get_index_slice((Excluded(usize::MAX), Unbounded)).is_none());
+}

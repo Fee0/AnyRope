@@ -444,11 +444,14 @@ fn write_range<T: Debug>(
 //==============================================================
 // Range handling utilities.
 
+// The `+ 1`s saturate: no rope can hold `usize::MAX` elements, so a saturated
+// bound is still out of bounds and gets reported as such.
+
 #[inline(always)]
 fn start_bound_to_num(b: Bound<&usize>) -> Option<usize> {
     match b {
         Bound::Included(n) => Some(*n),
-        Bound::Excluded(n) => Some(*n + 1),
+        Bound::Excluded(n) => Some(n.saturating_add(1)),
         Bound::Unbounded => None,
     }
 }
@@ -456,7 +459,7 @@ fn start_bound_to_num(b: Bound<&usize>) -> Option<usize> {
 #[inline(always)]
 fn end_bound_to_num(b: Bound<&usize>) -> Option<usize> {
     match b {
-        Bound::Included(n) => Some(*n + 1),
+        Bound::Included(n) => Some(n.saturating_add(1)),
         Bound::Excluded(n) => Some(*n),
         Bound::Unbounded => None,
     }

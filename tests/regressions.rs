@@ -109,3 +109,30 @@ fn remove_exclusive_inside_one_element_does_nothing() {
     rope.assert_invariants();
     assert_eq!(contents(&rope), model);
 }
+
+#[test]
+fn ord_agrees_with_eq_across_chunkings() {
+    let model = widths(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+
+    // Same contents, chunked differently.
+    let mut chunked = Rope::<Width, 4, 4>::new();
+    for chunk in model.chunks(3) {
+        chunked.append(Rope::from_slice(chunk));
+    }
+    let built = Rope::<Width, 4, 4>::from_slice(&model);
+    assert_ne!(
+        chunked.chunks().map(<[Width]>::len).collect::<Vec<_>>(),
+        built.chunks().map(<[Width]>::len).collect::<Vec<_>>(),
+        "test needs ropes with different chunking"
+    );
+
+    assert_eq!(chunked, built);
+    assert_eq!(chunked.cmp(&built), std::cmp::Ordering::Equal);
+    assert_eq!(built.cmp(&chunked), std::cmp::Ordering::Equal);
+
+    let mut greater = model.clone();
+    *greater.last_mut().unwrap() = Width(13);
+    let greater = Rope::<Width, 4, 4>::from_slice(&greater);
+    assert_eq!(chunked.cmp(&greater), std::cmp::Ordering::Less);
+    assert_eq!(greater.cmp(&chunked), std::cmp::Ordering::Greater);
+}

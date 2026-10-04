@@ -1358,8 +1358,8 @@ where
                     return compared;
                 }
 
-                chunk1 = &[];
                 chunk2 = &chunk2[chunk1.len()..];
+                chunk1 = &[];
             }
 
             if chunk1.is_empty() {

@@ -136,3 +136,35 @@ fn ord_agrees_with_eq_across_chunkings() {
     assert_eq!(chunked.cmp(&greater), std::cmp::Ordering::Less);
     assert_eq!(greater.cmp(&chunked), std::cmp::Ordering::Greater);
 }
+
+#[test]
+fn nested_measure_slice_is_relative_to_the_outer_slice() {
+    let model: Vec<Width> = (0..64).map(|i| Width([1, 2, 4, 1, 3, 5][i % 6])).collect();
+    let rope = Rope::<Width, 4, 4>::from_slice(&model);
+    let total = rope.measure();
+
+    // Outer slices starting on element boundaries, so that their measure 0 is
+    // unambiguous.
+    let starts = model.iter().scan(0, |offset, width| {
+        let start = *offset;
+        *offset += width.0;
+        Some(start)
+    });
+    for outer_start in starts.step_by(5) {
+        let outer = rope.measure_slice(outer_start..total, usize::cmp);
+        let outer_measure = outer.measure();
+        for (start, end) in [(0, 1), (3, 9), (5, 20), (0, outer_measure), (2, outer_measure)] {
+            if end > outer_measure {
+                continue;
+            }
+            let nested = outer.measure_slice(start..end, usize::cmp);
+            let direct = rope.measure_slice(outer_start + start..outer_start + end, usize::cmp);
+            assert_eq!(nested, direct, "outer {outer_start}.., nested {start}..{end}");
+            assert_eq!(
+                outer.get_measure_slice(start..end, usize::cmp),
+                Some(direct),
+                "outer {outer_start}.., nested {start}..{end}"
+            );
+        }
+    }
+}

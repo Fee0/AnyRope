@@ -455,9 +455,14 @@ where
         }
 
         match *self {
-            RopeSlice(RSEnum::Full { node, .. }) => {
-                RopeSlice::new_with_range(node, start, end, &cmp)
-            }
+            RopeSlice(RSEnum::Full {
+                node, start_info, ..
+            }) => RopeSlice::new_with_range(
+                node,
+                start_info.measure + start,
+                start_info.measure + end,
+                &cmp,
+            ),
             RopeSlice(RSEnum::Light { slice, .. }) => {
                 let start_index = start_measure_to_index(slice, start, &cmp);
                 let end_index = end_measure_to_index(slice, end, cmp);
@@ -1648,9 +1653,10 @@ mod tests {
         let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(5..43, usize::cmp);
 
+        // Measures are relative to `slice_1`, so this is `8..30` in the rope.
         let slice_2 = slice_1.measure_slice(3..25, usize::cmp);
 
-        assert_eq!(&pseudo_random()[2..13], slice_2);
+        assert_eq!(&pseudo_random()[5..16], slice_2);
     }
 
     #[test]
@@ -1658,9 +1664,10 @@ mod tests {
         let rope = Rope::<Width, 9, 5>::from_slice(pseudo_random().as_slice());
         let slice_1 = rope.measure_slice(31..97, usize::cmp);
 
+        // Measures are relative to `slice_1`, so this is `38..95` in the rope.
         let slice_2 = slice_1.measure_slice(7..64, usize::cmp);
 
-        assert_eq!(&pseudo_random()[17..48], slice_2);
+        assert_eq!(&pseudo_random()[19..50], slice_2);
     }
 
     #[test]
@@ -1669,8 +1676,9 @@ mod tests {
         let slice_1 = rope.measure_slice(5..43, usize::cmp);
 
         // A range in the middle of a list of 0 elements should capture all of
-        // them.
-        let slice_2 = slice_1.measure_slice(24..24, usize::cmp);
+        // them. Measures are relative to `slice_1`, so this is `24..24` in the
+        // rope.
+        let slice_2 = slice_1.measure_slice(19..19, usize::cmp);
 
         assert_eq!(slice_2, [Width(0), Width(0)].as_slice());
     }

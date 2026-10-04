@@ -1057,7 +1057,10 @@ where
                     // We do this from the end instead of the front so that
                     // the repeated insertions can keep re-using the same
                     // insertion point.
-                    let split_index = slice.len().saturating_sub(LEAF_CAP - 4);
+                    // `LEAF_CAP` may be as small as 4, so make sure every
+                    // chunk holds at least one element.
+                    let chunk_len = LEAF_CAP.saturating_sub(4).max(1);
+                    let split_index = slice.len().saturating_sub(chunk_len);
                     let ins_slice = &slice[split_index..];
                     slice = &slice[..split_index];
 

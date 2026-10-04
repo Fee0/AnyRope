@@ -88,3 +88,24 @@ fn leaves_respect_leaf_cap_when_it_differs_from_branch_cap() {
     assert!(rope.chunks().all(|chunk| chunk.len() <= 8));
     assert_eq!(contents(&rope), widths(&[1; 6]));
 }
+
+#[test]
+fn remove_exclusive_inside_one_element_does_nothing() {
+    let mut rope = Rope::<Width>::from_slice(&widths(&[4]));
+    rope.remove_exclusive(1..2, usize::cmp);
+    assert_eq!(contents(&rope), widths(&[4]));
+
+    // The array from the `remove_exclusive` docs; 4..5 lies inside the `Width(3)`.
+    let mut rope = Rope::<Width>::from_slice(&widths(&[1, 2, 3, 0, 0, 2, 1]));
+    assert!(rope.try_remove_exclusive(4..5, usize::cmp).is_ok());
+    assert_eq!(contents(&rope), widths(&[1, 2, 3, 0, 0, 2, 1]));
+
+    // The same, deep inside a multi-level tree.
+    let mut model = widths(&[1; 30]);
+    model[17] = Width(10);
+    let mut rope = Rope::<Width, 4, 4>::from_slice(&model);
+    rope.remove_exclusive(19..24, usize::cmp);
+    rope.assert_integrity();
+    rope.assert_invariants();
+    assert_eq!(contents(&rope), model);
+}

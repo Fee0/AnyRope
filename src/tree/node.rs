@@ -763,7 +763,11 @@ where
         start_measure_to_index(slice, end, cmp)
     };
 
-    slice.remove_range(start_index, end_index);
+    // An exclusive range that lies strictly inside one element covers no
+    // elements, which shows up here as `start_index > end_index`.
+    if start_index < end_index {
+        slice.remove_range(start_index, end_index);
+    }
     (SliceInfo::<M::Measure>::from_slice(slice), false)
 }
 
